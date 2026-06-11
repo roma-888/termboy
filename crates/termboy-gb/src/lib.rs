@@ -19,6 +19,13 @@ pub const DMG_GREEN: [Rgb; 4] = [
     Rgb(0x08, 0x18, 0x20),
 ];
 
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// T-cycles per video frame (154 scanlines x 456 cycles, ~59.73 Hz).
 pub const CYCLES_PER_FRAME: u64 = 70224;
 
@@ -73,12 +80,12 @@ impl Core for GameBoy {
         &self.frame
     }
 
-    fn save_ram(&self) -> Option<&[u8]> {
-        self.cpu.bus.cart.ram()
+    fn save_ram(&self) -> Option<Vec<u8>> {
+        self.cpu.bus.cart.save(unix_now())
     }
 
     fn load_ram(&mut self, data: &[u8]) {
-        self.cpu.bus.cart.load_ram(data);
+        self.cpu.bus.cart.load(data, unix_now());
     }
 }
 

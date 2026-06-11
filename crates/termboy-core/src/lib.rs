@@ -38,8 +38,9 @@ impl Buttons {
 pub trait Core {
     /// Run exactly one video frame's worth of emulated time and return the frame.
     fn run_frame(&mut self, buttons: Buttons) -> &FrameBuffer;
-    /// Battery-backed RAM if the loaded cartridge has any (for .sav persistence).
-    fn save_ram(&self) -> Option<&[u8]>;
+    /// Battery-backed save state if the loaded cartridge has any
+    /// (owned: cores may append metadata such as RTC time at save time).
+    fn save_ram(&self) -> Option<Vec<u8>>;
     fn load_ram(&mut self, data: &[u8]);
 }
 

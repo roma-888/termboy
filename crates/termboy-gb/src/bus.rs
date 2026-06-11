@@ -60,6 +60,7 @@ impl Bus {
             }
             self.intf |= self.ppu.tick();
         }
+        self.cart.tick(4);
         // OAM DMA: one byte per M-cycle, 160 M-cycles total.
         if self.dma_idx < 0xA0 {
             let value = self.read(self.dma_src + self.dma_idx as u16);

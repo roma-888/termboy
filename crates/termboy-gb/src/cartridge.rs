@@ -27,9 +27,26 @@ pub trait Mbc {
     fn write_rom(&mut self, addr: u16, value: u8);
     fn read_ram(&self, addr: u16) -> u8;
     fn write_ram(&mut self, addr: u16, value: u8);
-    /// Battery-backed RAM contents, if this cartridge has battery RAM.
-    fn ram(&self) -> Option<&[u8]>;
-    fn load_ram(&mut self, data: &[u8]);
+    /// Persistable battery state (RAM, + RTC for MBC3). None without battery.
+    /// `now` = unix seconds, stamped into RTC saves.
+    fn save(&self, now: u64) -> Option<Vec<u8>>;
+    fn load(&mut self, data: &[u8], now: u64);
+    /// Advance emulated time — MBC3's RTC counts T-cycles. Default no-op.
+    fn tick(&mut self, tcycles: u32) {
+        let _ = tcycles;
+    }
+}
+
+/// RAM size in bytes from header byte 0x149.
+pub(crate) fn ram_size(code: u8) -> usize {
+    match code {
+        0x01 => 0x800,
+        0x02 => 0x2000,
+        0x03 => 0x8000,
+        0x04 => 0x20000,
+        0x05 => 0x10000,
+        _ => 0,
+    }
 }
 
 struct RomOnly {
@@ -43,8 +60,8 @@ impl Mbc for RomOnly {
     fn write_rom(&mut self, _addr: u16, _value: u8) {}
     fn read_ram(&self, _addr: u16) -> u8 { 0xFF }
     fn write_ram(&mut self, _addr: u16, _value: u8) {}
-    fn ram(&self) -> Option<&[u8]> { None }
-    fn load_ram(&mut self, _data: &[u8]) {}
+    fn save(&self, _now: u64) -> Option<Vec<u8>> { None }
+    fn load(&mut self, _data: &[u8], _now: u64) {}
 }
 
 pub struct Cartridge {
@@ -85,8 +102,9 @@ impl Cartridge {
     pub fn write_rom(&mut self, addr: u16, value: u8) { self.mbc.write_rom(addr, value) }
     pub fn read_ram(&self, addr: u16) -> u8 { self.mbc.read_ram(addr) }
     pub fn write_ram(&mut self, addr: u16, value: u8) { self.mbc.write_ram(addr, value) }
-    pub fn ram(&self) -> Option<&[u8]> { self.mbc.ram() }
-    pub fn load_ram(&mut self, data: &[u8]) { self.mbc.load_ram(data) }
+    pub fn save(&self, now: u64) -> Option<Vec<u8>> { self.mbc.save(now) }
+    pub fn load(&mut self, data: &[u8], now: u64) { self.mbc.load(data, now) }
+    pub fn tick(&mut self, tcycles: u32) { self.mbc.tick(tcycles) }
 }
 
 #[cfg(test)]
@@ -108,7 +126,7 @@ mod tests {
         cart.write_rom(0x1234, 0xFF); // must be ignored
         assert_eq!(cart.read_rom(0x1234), 0xAB);
         assert_eq!(cart.read_ram(0xA000), 0xFF); // no RAM -> open bus
-        assert!(cart.ram().is_none());
+        assert!(cart.save(0).is_none());
     }
 
     #[test]
