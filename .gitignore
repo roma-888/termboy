@@ -4,3 +4,4 @@
 *.sav
 !crates/termboy-gb/tests/roms/**/*.gb
 docs/superpowers/
+/roms/
