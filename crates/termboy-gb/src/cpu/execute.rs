@@ -2,6 +2,7 @@
 //! compiler's exhaustiveness check proves all 256 opcodes are handled.
 
 use super::Cpu;
+use super::registers::{C, H, N, Z};
 
 impl Cpu {
     pub(crate) fn get_r(&mut self, i: u8) -> u8 {
@@ -138,6 +139,53 @@ impl Cpu {
             0xFA => {
                 let nn = self.fetch16();
                 self.regs.a = self.read8(nn);
+            }
+            // LD rr,nn
+            0x01 | 0x11 | 0x21 | 0x31 => {
+                let v = self.fetch16();
+                self.set_rr((op >> 4) & 3, v);
+            }
+            // LD (nn),SP
+            0x08 => {
+                let nn = self.fetch16();
+                let sp = self.regs.sp;
+                self.write8(nn, sp as u8);
+                self.write8(nn.wrapping_add(1), (sp >> 8) as u8);
+            }
+            // LD SP,HL
+            0xF9 => {
+                self.bus.tick();
+                self.regs.sp = self.regs.hl();
+            }
+            // PUSH rr (0=BC 1=DE 2=HL 3=AF)
+            0xC5 | 0xD5 | 0xE5 | 0xF5 => {
+                let v = match (op >> 4) & 3 {
+                    0 => self.regs.bc(),
+                    1 => self.regs.de(),
+                    2 => self.regs.hl(),
+                    _ => self.regs.af(),
+                };
+                self.push16(v);
+            }
+            // POP rr
+            0xC1 | 0xD1 | 0xE1 | 0xF1 => {
+                let v = self.pop16();
+                match (op >> 4) & 3 {
+                    0 => self.regs.set_bc(v),
+                    1 => self.regs.set_de(v),
+                    2 => self.regs.set_hl(v),
+                    _ => self.regs.set_af(v), // set_af masks F's low nibble
+                }
+            }
+            // LD HL,SP+e
+            0xF8 => {
+                let e = self.fetch() as i8 as i16 as u16;
+                self.bus.tick();
+                let sp = self.regs.sp;
+                self.regs.f = 0;
+                self.regs.set_flag(H, (sp & 0x0F) + (e & 0x0F) > 0x0F);
+                self.regs.set_flag(C, (sp & 0xFF) + (e & 0xFF) > 0xFF);
+                self.regs.set_hl(sp.wrapping_add(e));
             }
             _ => unimplemented!("opcode {op:#04X} at {:#06X}", self.regs.pc.wrapping_sub(1)),
         }
