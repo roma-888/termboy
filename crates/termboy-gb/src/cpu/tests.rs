@@ -200,3 +200,37 @@ fn scf_ccf_cpl() {
     assert_eq!(cpu.regs.a, 0x55);
     assert!(cpu.regs.flag(N) && cpu.regs.flag(H));
 }
+
+#[test]
+fn add_hl_rr_sets_carries_keeps_z() {
+    let mut cpu = cpu_with(&[0x09]); // ADD HL,BC
+    cpu.regs.set_hl(0x8FFF);
+    cpu.regs.set_bc(0x7001);
+    cpu.regs.set_flag(Z, true);
+    cpu.step();
+    assert_eq!(cpu.regs.hl(), 0x0000);
+    assert!(cpu.regs.flag(H) && cpu.regs.flag(C) && cpu.regs.flag(Z));
+    assert!(!cpu.regs.flag(N));
+    assert_eq!(cpu.bus.cycles, 8);
+}
+
+#[test]
+fn inc_rr_no_flags_dec_rr_wraps() {
+    let mut cpu = cpu_with(&[0x03, 0x0B, 0x0B]); // INC BC ; DEC BC ; DEC BC
+    cpu.step();
+    assert_eq!(cpu.regs.bc(), 0x0014); // post-boot BC = 0x0013
+    assert_eq!(cpu.regs.f & 0xF0, 0xB0); // flags untouched
+    assert_eq!(cpu.bus.cycles, 8);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.bc(), 0x0012);
+}
+
+#[test]
+fn add_sp_e_negative_offset() {
+    let mut cpu = cpu_with(&[0xE8, 0xFE]); // ADD SP,-2
+    cpu.regs.sp = 0xFFFE;
+    cpu.step();
+    assert_eq!(cpu.regs.sp, 0xFFFC);
+    assert_eq!(cpu.bus.cycles, 16);
+}

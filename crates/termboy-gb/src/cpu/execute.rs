@@ -317,6 +317,41 @@ impl Cpu {
                 self.regs.set_flag(H, false);
                 self.regs.set_flag(C, !c);
             }
+            // ADD HL,rr
+            0x09 | 0x19 | 0x29 | 0x39 => {
+                self.bus.tick();
+                let hl = self.regs.hl();
+                let v = self.get_rr((op >> 4) & 3);
+                let result = hl.wrapping_add(v);
+                self.regs.set_flag(N, false);
+                self.regs.set_flag(H, (hl & 0x0FFF) + (v & 0x0FFF) > 0x0FFF);
+                self.regs.set_flag(C, hl as u32 + v as u32 > 0xFFFF);
+                self.regs.set_hl(result);
+            }
+            // INC rr / DEC rr (no flags)
+            0x03 | 0x13 | 0x23 | 0x33 => {
+                self.bus.tick();
+                let i = (op >> 4) & 3;
+                let v = self.get_rr(i).wrapping_add(1);
+                self.set_rr(i, v);
+            }
+            0x0B | 0x1B | 0x2B | 0x3B => {
+                self.bus.tick();
+                let i = (op >> 4) & 3;
+                let v = self.get_rr(i).wrapping_sub(1);
+                self.set_rr(i, v);
+            }
+            // ADD SP,e
+            0xE8 => {
+                let e = self.fetch() as i8 as i16 as u16;
+                self.bus.tick();
+                self.bus.tick();
+                let sp = self.regs.sp;
+                self.regs.f = 0;
+                self.regs.set_flag(H, (sp & 0x0F) + (e & 0x0F) > 0x0F);
+                self.regs.set_flag(C, (sp & 0xFF) + (e & 0xFF) > 0xFF);
+                self.regs.sp = sp.wrapping_add(e);
+            }
             _ => unimplemented!("opcode {op:#04X} at {:#06X}", self.regs.pc.wrapping_sub(1)),
         }
     }
