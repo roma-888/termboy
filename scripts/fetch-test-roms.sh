@@ -24,3 +24,6 @@ mkdir -p "$dest/dmg-acid2"
 curl -sfL "https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb" \
   -o "$dest/dmg-acid2/dmg-acid2.gb"
 echo "fetched dmg-acid2/dmg-acid2.gb"
+
+curl -sfL "$base/cpu_instrs/cpu_instrs.gb" -o "$dest/cpu_instrs/cpu_instrs.gb"
+echo "fetched cpu_instrs/cpu_instrs.gb"

@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use crate::mbc1::Mbc1;
+
 #[derive(Debug)]
 pub enum CartError {
     TooSmall,
@@ -81,9 +83,10 @@ impl Cartridge {
         }
         let mbc: Box<dyn Mbc> = match rom[0x147] {
             0x00 => Box::new(RomOnly { rom }),
-            // A 32 KB MBC1 ROM never banks, so it behaves identically to
-            // ROM-only. Blargg's test ROMs declare MBC1 despite being 32 KB.
-            0x01 if rom.len() <= 0x8000 => Box::new(RomOnly { rom }),
+            0x01..=0x03 => {
+                let (battery, ram) = (rom[0x147] == 0x03, ram_size(rom[0x149]));
+                Box::new(Mbc1::new(rom, ram, battery))
+            }
             code => {
                 let name = match code {
                     0x01..=0x03 => "MBC1",

@@ -76,3 +76,8 @@ fn cpu_instrs_11_op_a_hl() {
 fn instr_timing() {
     run_blargg("instr_timing/instr_timing.gb");
 }
+
+#[test]
+fn cpu_instrs_combined_mbc1() {
+    run_blargg("cpu_instrs/cpu_instrs.gb");
+}
