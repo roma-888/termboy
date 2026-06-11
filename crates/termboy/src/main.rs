@@ -3,13 +3,17 @@
 //! when it isn't (`--exact` disables downscaling).
 //! `--headless` runs without UI and streams serial output (debug tool).
 
+mod input;
 mod screen;
 
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
 use crossterm::{cursor, execute, terminal};
 use termboy_core::{Buttons, Core};
 use termboy_gb::GameBoy;
@@ -63,23 +67,37 @@ fn run_headless(mut gb: GameBoy) -> ExitCode {
 }
 
 /// Restores the terminal even on panic (design spec §4).
-struct TerminalGuard;
+struct TerminalGuard {
+    /// Kitty keyboard protocol active: real press/release events.
+    enhanced: bool,
+}
 
 impl TerminalGuard {
     fn enter() -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
+        // Must be queried in raw mode, before the alternate screen.
+        let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
         execute!(
             std::io::stdout(),
             terminal::EnterAlternateScreen,
             cursor::Hide,
             terminal::Clear(terminal::ClearType::All)
         )?;
-        Ok(Self)
+        if enhanced {
+            execute!(
+                std::io::stdout(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+            )?;
+        }
+        Ok(Self { enhanced })
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        if self.enhanced {
+            let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+        }
         let _ = execute!(
             std::io::stdout(),
             cursor::Show,
@@ -105,21 +123,26 @@ fn run_terminal(mut gb: GameBoy, exact: bool) -> ExitCode {
         default_hook(info);
     }));
 
-    let _guard = match TerminalGuard::enter() {
+    let guard = match TerminalGuard::enter() {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: cannot enter raw mode: {e}");
             return ExitCode::FAILURE;
         }
     };
+    let mut input = input::Input::new(guard.enhanced);
 
     let mut out = String::new();
     let mut next_frame = Instant::now();
     loop {
-        // Input: Esc quits. (Game buttons land in Milestone 3.)
+        // Input: Esc quits, everything else goes to the tracker.
+        let now = Instant::now();
         while event::poll(Duration::ZERO).unwrap_or(false) {
             match event::read() {
-                Ok(Event::Key(k)) if k.code == KeyCode::Esc => return ExitCode::SUCCESS,
+                Ok(Event::Key(k)) if k.code == KeyCode::Esc && k.kind == KeyEventKind::Press => {
+                    return ExitCode::SUCCESS;
+                }
+                Ok(Event::Key(k)) => input.handle(&k, now),
                 Ok(Event::Resize(..)) => screen.invalidate(),
                 _ => {}
             }
@@ -154,7 +177,7 @@ fn run_terminal(mut gb: GameBoy, exact: bool) -> ExitCode {
             std::io::stdout().flush().ok();
         }
 
-        let fb = gb.run_frame(Buttons::default());
+        let fb = gb.run_frame(input.buttons(Instant::now()));
         out.clear();
         screen.render(fb, &mut out);
         if !out.is_empty() {
