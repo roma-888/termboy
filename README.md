@@ -6,8 +6,10 @@ Written in Rust. Targets the original Game Boy (DMG) first, with an architecture
 
 ## Status
 
-Milestone 3 complete: games are playable. Blargg cpu_instrs + instr_timing
-and dmg-acid2 (pixel-exact vs the official reference) all pass.
+Milestone 4 complete: MBC1 + MBC3 cartridges with battery saves (`<rom>.sav`,
+auto-flushed) and the MBC3 real-time clock. Tetris, Zelda, Mario Land and
+Pokémon Red are playable with persistent saves. Blargg cpu_instrs (individual
++ combined) + instr_timing and dmg-acid2 (pixel-exact) all pass.
 
 - `cargo run --release -p termboy -- <rom.gb>` — play a ROM in any truecolor terminal (pixel-perfect at 160x72+, auto-scaled to fit below that; `--exact` disables scaling)
 - `cargo run --release -p termboy -- --headless <rom.gb>` — run headless, print serial output
