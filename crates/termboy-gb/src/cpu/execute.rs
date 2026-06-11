@@ -487,8 +487,24 @@ impl Cpu {
                 self.push16(self.regs.pc);
                 self.regs.pc = (op & 0x38) as u16;
             }
-            // DI / EI / HALT / STOP land in Task 14
-            0xF3 | 0xFB | 0x76 | 0x10 => todo!("task 14"),
+            0xF3 => {
+                // DI
+                self.ime = false;
+                self.ime_pending = false;
+            }
+            0xFB => self.ime_pending = true, // EI (delayed one instruction)
+            0x76 => {
+                // HALT
+                if !self.ime && (self.bus.inte & self.bus.intf & 0x1F) != 0 {
+                    self.halt_bug = true; // pending IRQ with IME off: the infamous halt bug
+                } else {
+                    self.halted = true;
+                }
+            }
+            0x10 => {
+                // STOP consumes its padding byte; no-op until GBC speed switch
+                self.fetch();
+            }
             // invalid opcodes — real hardware locks up; fail loudly during development
             0xD3 | 0xDB | 0xDD | 0xE3 | 0xE4 | 0xEB | 0xEC | 0xED | 0xF4 | 0xFC | 0xFD => {
                 panic!("invalid opcode {op:#04X} at {:#06X}", self.regs.pc.wrapping_sub(1));

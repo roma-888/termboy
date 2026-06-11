@@ -362,3 +362,83 @@ fn jp_hl_is_one_mcycle() {
     assert_eq!(cpu.regs.pc, 0x1234);
     assert_eq!(cpu.bus.cycles, 4);
 }
+
+use crate::bus::IF_TIMER;
+
+#[test]
+fn interrupt_dispatch_vectors_and_timing() {
+    let mut cpu = cpu_with(&[0x00]);
+    cpu.ime = true;
+    cpu.bus.inte = IF_TIMER;
+    cpu.bus.intf = IF_TIMER;
+    let sp0 = cpu.regs.sp;
+    cpu.step();
+    assert_eq!(cpu.regs.pc, 0x50); // timer vector
+    assert_eq!(cpu.bus.cycles, 20); // 5 M-cycles
+    assert!(!cpu.ime);
+    assert_eq!(cpu.bus.intf & IF_TIMER, 0);
+    assert_eq!(cpu.regs.sp, sp0 - 2);
+    assert_eq!(cpu.bus.read(sp0 - 2), 0x00); // pushed PC lo
+    assert_eq!(cpu.bus.read(sp0 - 1), 0x01); // pushed PC hi (0x0100)
+}
+
+#[test]
+fn vblank_beats_timer_priority() {
+    let mut cpu = cpu_with(&[0x00]);
+    cpu.ime = true;
+    cpu.bus.inte = 0x05; // vblank + timer
+    cpu.bus.intf = 0x05;
+    cpu.step();
+    assert_eq!(cpu.regs.pc, 0x40);
+}
+
+#[test]
+fn ei_takes_effect_after_next_instruction() {
+    let mut cpu = cpu_with(&[0xFB, 0x00, 0x00]); // EI ; NOP ; NOP
+    cpu.bus.inte = IF_TIMER;
+    cpu.bus.intf = IF_TIMER;
+    cpu.step(); // EI
+    cpu.step(); // NOP executes — no dispatch yet
+    assert_eq!(cpu.regs.pc, 0x102);
+    cpu.step(); // now the interrupt dispatches
+    assert_eq!(cpu.regs.pc, 0x50);
+}
+
+#[test]
+fn di_disables_immediately() {
+    let mut cpu = cpu_with(&[0xF3, 0x00]); // DI ; NOP
+    cpu.ime = true;
+    cpu.step(); // DI clears IME before any interrupt is raised
+    cpu.bus.inte = IF_TIMER;
+    cpu.bus.intf = IF_TIMER;
+    cpu.step(); // NOP — pending IRQ must NOT dispatch
+    assert_eq!(cpu.regs.pc, 0x102);
+    assert!(!cpu.ime);
+}
+
+#[test]
+fn halt_wakes_on_interrupt_without_ime() {
+    let mut cpu = cpu_with(&[0x76, 0x00]); // HALT ; NOP — IME=0, nothing pending yet
+    cpu.step(); // halts
+    cpu.step(); // still halted, time passes
+    assert!(cpu.halted);
+    assert_eq!(cpu.regs.pc, 0x101);
+    cpu.bus.intf = IF_TIMER;
+    cpu.bus.inte = IF_TIMER;
+    cpu.step(); // wakes, executes NOP, no dispatch (IME=0)
+    assert!(!cpu.halted);
+    assert_eq!(cpu.regs.pc, 0x102);
+}
+
+#[test]
+fn halt_bug_repeats_next_byte() {
+    let mut cpu = cpu_with(&[0x76, 0x3C]); // HALT ; INC A — with IME=0 and IRQ pending
+    cpu.bus.inte = IF_TIMER;
+    cpu.bus.intf = IF_TIMER;
+    cpu.step(); // HALT: bug triggers, no halt
+    assert!(!cpu.halted);
+    cpu.step(); // INC A, but PC doesn't advance
+    cpu.step(); // INC A again
+    assert_eq!(cpu.regs.a, 0x03); // post-boot A=1, incremented twice
+    assert_eq!(cpu.regs.pc, 0x102);
+}
