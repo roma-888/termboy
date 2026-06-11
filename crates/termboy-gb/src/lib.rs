@@ -2,6 +2,7 @@ pub mod bus;
 pub mod cartridge;
 pub mod joypad;
 mod mbc1;
+mod mbc3;
 pub mod cpu;
 pub mod ppu;
 pub mod serial;

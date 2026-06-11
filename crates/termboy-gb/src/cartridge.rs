@@ -4,6 +4,7 @@
 use std::fmt;
 
 use crate::mbc1::Mbc1;
+use crate::mbc3::Mbc3;
 
 #[derive(Debug)]
 pub enum CartError {
@@ -86,6 +87,12 @@ impl Cartridge {
             0x01..=0x03 => {
                 let (battery, ram) = (rom[0x147] == 0x03, ram_size(rom[0x149]));
                 Box::new(Mbc1::new(rom, ram, battery))
+            }
+            0x0F..=0x13 => {
+                let battery = matches!(rom[0x147], 0x0F | 0x10 | 0x13);
+                let has_rtc = matches!(rom[0x147], 0x0F | 0x10);
+                let ram = ram_size(rom[0x149]);
+                Box::new(Mbc3::new(rom, ram, battery, has_rtc))
             }
             code => {
                 let name = match code {
