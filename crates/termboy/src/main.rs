@@ -1,4 +1,6 @@
 //! Terminal frontend: half-block rendering at the Game Boy's 59.73 Hz.
+//! Pixel-perfect when the terminal is big enough, auto-downscaled to fit
+//! when it isn't (`--exact` disables downscaling).
 //! `--headless` runs without UI and streams serial output (debug tool).
 
 mod screen;
@@ -18,8 +20,9 @@ const FRAME_TIME: Duration = Duration::from_nanos(70_224 * 1_000_000_000 / 4_194
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let headless = args.iter().any(|a| a == "--headless");
+    let exact = args.iter().any(|a| a == "--exact");
     let Some(path) = args.iter().find(|a| !a.starts_with("--")) else {
-        eprintln!("usage: termboy [--headless] <rom.gb>");
+        eprintln!("usage: termboy [--headless] [--exact] <rom.gb>");
         return ExitCode::FAILURE;
     };
     let rom = match std::fs::read(path) {
@@ -39,7 +42,7 @@ fn main() -> ExitCode {
     if headless {
         run_headless(gb)
     } else {
-        run_terminal(gb)
+        run_terminal(gb, exact)
     }
 }
 
@@ -86,9 +89,10 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn run_terminal(mut gb: GameBoy) -> ExitCode {
+fn run_terminal(mut gb: GameBoy, exact: bool) -> ExitCode {
     let mut screen = screen::Screen::new(160, 144);
     let (need_cols, need_rows) = screen.required_size();
+    let mut last_size = (0u16, 0u16);
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -122,18 +126,32 @@ fn run_terminal(mut gb: GameBoy) -> ExitCode {
         }
 
         let (cols, rows) = terminal::size().unwrap_or((0, 0));
-        if (cols as usize) < need_cols || (rows as usize) < need_rows {
+        let too_small = if exact {
+            (cols as usize) < need_cols || (rows as usize) < need_rows
+        } else {
+            cols < 16 || rows < 8 // below this nothing recognizable fits
+        };
+        if too_small {
             out.clear();
             out.push_str("\x1b[2J\x1b[H\x1b[0m");
+            let (nc, nr) = if exact { (need_cols, need_rows) } else { (16, 8) };
             out.push_str(&format!(
-                "termboy needs a {need_cols}x{need_rows} terminal (yours: {cols}x{rows}). Resize, or press Esc to quit."
+                "termboy needs a {nc}x{nr} terminal (yours: {cols}x{rows}). Resize, or press Esc to quit."
             ));
             print!("{out}");
             std::io::stdout().flush().ok();
             screen.invalidate();
+            last_size = (0, 0);
             std::thread::sleep(Duration::from_millis(100));
             next_frame = Instant::now();
             continue;
+        }
+        if (cols, rows) != last_size {
+            last_size = (cols, rows);
+            screen.set_viewport(cols as usize, rows as usize);
+            screen.invalidate();
+            print!("\x1b[2J"); // clear leftovers outside the (re)centered image
+            std::io::stdout().flush().ok();
         }
 
         let fb = gb.run_frame(Buttons::default());
