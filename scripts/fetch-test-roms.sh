@@ -19,3 +19,8 @@ for r in "${roms[@]}"; do
 done
 curl -sfL "$base/instr_timing/instr_timing.gb" -o "$dest/instr_timing/instr_timing.gb"
 echo "fetched instr_timing/instr_timing.gb"
+
+mkdir -p "$dest/dmg-acid2"
+curl -sfL "https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb" \
+  -o "$dest/dmg-acid2/dmg-acid2.gb"
+echo "fetched dmg-acid2/dmg-acid2.gb"
