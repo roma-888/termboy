@@ -64,6 +64,9 @@ impl Cartridge {
         }
         let mbc: Box<dyn Mbc> = match rom[0x147] {
             0x00 => Box::new(RomOnly { rom }),
+            // A 32 KB MBC1 ROM never banks, so it behaves identically to
+            // ROM-only. Blargg's test ROMs declare MBC1 despite being 32 KB.
+            0x01 if rom.len() <= 0x8000 => Box::new(RomOnly { rom }),
             code => {
                 let name = match code {
                     0x01..=0x03 => "MBC1",
