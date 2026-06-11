@@ -73,3 +73,75 @@ fn stat_reads_with_bit7_set_and_lyc_flag() {
     ppu.lyc = 5;
     assert_eq!(ppu.read_stat() & 0x04, 0);
 }
+
+/// Write a solid-color tile (all pixels = `color` 0..=3) at tile index `i`.
+pub fn put_tile(ppu: &mut Ppu, i: usize, color: u8) {
+    for row in 0..8 {
+        ppu.vram[i * 16 + row * 2] = if color & 1 != 0 { 0xFF } else { 0x00 };
+        ppu.vram[i * 16 + row * 2 + 1] = if color & 2 != 0 { 0xFF } else { 0x00 };
+    }
+}
+
+/// Render line `ly` in isolation and return it.
+pub fn render_one_line(ppu: &mut Ppu, ly: u8) -> [u8; 160] {
+    ppu.ly = ly;
+    ppu.render_line();
+    let y = ly as usize;
+    let mut out = [0u8; 160];
+    out.copy_from_slice(&ppu.frame[y * 160..(y + 1) * 160]);
+    out
+}
+
+#[test]
+fn bg_renders_tiles_through_bgp() {
+    let mut ppu = Ppu::new();
+    ppu.lcdc = LCDC_LCD_ON | LCDC_BG_ON | LCDC_TILE_DATA; // unsigned tiles, map 0x9800
+    ppu.bgp = 0b11_10_01_00; // identity: color n -> shade n
+    put_tile(&mut ppu, 1, 3);
+    ppu.vram[0x1800] = 1; // map (0,0) = tile 1; rest = tile 0 (color 0)
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(&line[0..8], &[3; 8]);
+    assert_eq!(&line[8..16], &[0; 8]);
+}
+
+#[test]
+fn bg_respects_scroll_and_wraps() {
+    let mut ppu = Ppu::new();
+    ppu.lcdc = LCDC_LCD_ON | LCDC_BG_ON | LCDC_TILE_DATA;
+    ppu.bgp = 0b11_10_01_00;
+    put_tile(&mut ppu, 1, 2);
+    ppu.vram[0x1800] = 1; // tile (0,0)
+    ppu.scx = 4; // shifts tile 4px left
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(&line[0..4], &[2; 4]);
+    assert_eq!(line[4], 0);
+    ppu.scx = 0;
+    ppu.scy = 8; // now map row 1 (all tile 0) is used for ly=0
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(line[0], 0);
+}
+
+#[test]
+fn signed_tile_addressing() {
+    let mut ppu = Ppu::new();
+    ppu.lcdc = LCDC_LCD_ON | LCDC_BG_ON; // bit4 clear -> signed from 0x9000
+    ppu.bgp = 0b11_10_01_00;
+    // tile index 0x80 (-128) lives at 0x9000 - 128*16 = 0x8800 (VRAM offset 0x800)
+    for row in 0..8 {
+        ppu.vram[0x800 + row * 2] = 0xFF;
+        ppu.vram[0x800 + row * 2 + 1] = 0x00;
+    }
+    ppu.vram[0x1800] = 0x80;
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(&line[0..8], &[1; 8]);
+}
+
+#[test]
+fn bg_disabled_renders_shade_zero() {
+    let mut ppu = Ppu::new();
+    ppu.lcdc = LCDC_LCD_ON | LCDC_TILE_DATA; // BG off
+    ppu.bgp = 0b11_10_01_00;
+    put_tile(&mut ppu, 0, 3);
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(&line[..], &[0u8; 160][..]);
+}
