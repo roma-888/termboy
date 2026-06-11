@@ -114,6 +114,55 @@ impl Cpu {
         }
     }
 
+    /// Shared by CB rotates and the A-register variants (which clear Z).
+    fn rotate(&mut self, kind: u8, v: u8) -> u8 {
+        let carry_in = self.regs.flag(C) as u8;
+        let (result, carry_out) = match kind {
+            0 => (v.rotate_left(1), v & 0x80 != 0),           // RLC
+            1 => (v.rotate_right(1), v & 0x01 != 0),          // RRC
+            2 => ((v << 1) | carry_in, v & 0x80 != 0),        // RL
+            3 => ((v >> 1) | (carry_in << 7), v & 0x01 != 0), // RR
+            4 => (v << 1, v & 0x80 != 0),                     // SLA
+            5 => ((v >> 1) | (v & 0x80), v & 0x01 != 0),      // SRA (sign extends)
+            6 => (v.rotate_left(4), false),                   // SWAP
+            _ => (v >> 1, v & 0x01 != 0),                     // SRL
+        };
+        self.regs.f = 0;
+        self.regs.set_flag(Z, result == 0);
+        self.regs.set_flag(C, carry_out);
+        result
+    }
+
+    fn execute_cb(&mut self) {
+        let op = self.fetch();
+        let i = op & 7;
+        let n = (op >> 3) & 7; // rotate kind, or bit number
+        match op >> 6 {
+            0 => {
+                let v = self.get_r(i);
+                let r = self.rotate(n, v);
+                self.set_r(i, r);
+            }
+            1 => {
+                // BIT n,r — read-only, C preserved
+                let v = self.get_r(i);
+                self.regs.set_flag(Z, v & (1 << n) == 0);
+                self.regs.set_flag(N, false);
+                self.regs.set_flag(H, true);
+            }
+            2 => {
+                // RES n,r
+                let v = self.get_r(i);
+                self.set_r(i, v & !(1 << n));
+            }
+            _ => {
+                // SET n,r
+                let v = self.get_r(i);
+                self.set_r(i, v | (1 << n));
+            }
+        }
+    }
+
     pub(crate) fn execute(&mut self, op: u8) {
         match op {
             0x00 => {} // NOP
@@ -352,6 +401,14 @@ impl Cpu {
                 self.regs.set_flag(C, (sp & 0xFF) + (e & 0xFF) > 0xFF);
                 self.regs.sp = sp.wrapping_add(e);
             }
+            // rotates on A — same helpers as CB but Z is always cleared
+            0x07 | 0x0F | 0x17 | 0x1F => {
+                let a = self.regs.a;
+                let r = self.rotate((op >> 3) & 3, a);
+                self.regs.a = r;
+                self.regs.set_flag(Z, false);
+            }
+            0xCB => self.execute_cb(),
             _ => unimplemented!("opcode {op:#04X} at {:#06X}", self.regs.pc.wrapping_sub(1)),
         }
     }

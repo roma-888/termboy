@@ -234,3 +234,61 @@ fn add_sp_e_negative_offset() {
     assert_eq!(cpu.regs.sp, 0xFFFC);
     assert_eq!(cpu.bus.cycles, 16);
 }
+
+#[test]
+fn rla_rotates_through_carry_and_clears_z() {
+    let mut cpu = cpu_with(&[0x17]); // RLA
+    cpu.regs.a = 0x80;
+    cpu.regs.set_flag(C, true);
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x01);
+    assert!(cpu.regs.flag(C));
+    assert!(!cpu.regs.flag(Z)); // Z must be 0 even when the result is 0
+    assert_eq!(cpu.bus.cycles, 4);
+}
+
+#[test]
+fn cb_rlc_b_sets_z_when_zero() {
+    let mut cpu = cpu_with(&[0xCB, 0x00]); // RLC B
+    cpu.regs.b = 0x00;
+    cpu.step();
+    assert!(cpu.regs.flag(Z));
+    assert_eq!(cpu.bus.cycles, 8);
+}
+
+#[test]
+fn cb_sra_keeps_sign_srl_does_not() {
+    let mut cpu = cpu_with(&[0xCB, 0x28, 0xCB, 0x38]); // SRA B ; SRL B
+    cpu.regs.b = 0x81;
+    cpu.step();
+    assert_eq!(cpu.regs.b, 0xC0);
+    assert!(cpu.regs.flag(C));
+    cpu.step();
+    assert_eq!(cpu.regs.b, 0x60);
+}
+
+#[test]
+fn cb_swap_nibbles() {
+    let mut cpu = cpu_with(&[0xCB, 0x37]); // SWAP A
+    cpu.regs.a = 0xF1;
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x1F);
+    assert!(!cpu.regs.flag(C));
+}
+
+#[test]
+fn cb_bit_res_set_on_hl() {
+    // BIT 7,(HL) ; SET 7,(HL) ; RES 0,(HL)
+    let mut cpu = cpu_with(&[0xCB, 0x7E, 0xCB, 0xFE, 0xCB, 0x86]);
+    cpu.regs.set_hl(0xC000);
+    cpu.bus.write(0xC000, 0x01);
+    cpu.step();
+    assert!(cpu.regs.flag(Z)); // bit 7 is 0
+    assert!(cpu.regs.flag(H) && !cpu.regs.flag(N));
+    assert_eq!(cpu.bus.cycles, 12); // BIT (HL) = 3 M-cycles
+    cpu.step();
+    assert_eq!(cpu.bus.read(0xC000), 0x81);
+    assert_eq!(cpu.bus.cycles, 12 + 16); // SET (HL) = 4 M-cycles
+    cpu.step();
+    assert_eq!(cpu.bus.read(0xC000), 0x80);
+}
