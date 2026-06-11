@@ -163,6 +163,39 @@ impl Cpu {
         }
     }
 
+    fn condition(&self, op: u8) -> bool {
+        match (op >> 3) & 3 {
+            0 => !self.regs.flag(Z),
+            1 => self.regs.flag(Z),
+            2 => !self.regs.flag(C),
+            _ => self.regs.flag(C),
+        }
+    }
+
+    fn jr(&mut self, take: bool) {
+        let e = self.fetch() as i8;
+        if take {
+            self.bus.tick();
+            self.regs.pc = self.regs.pc.wrapping_add(e as u16);
+        }
+    }
+
+    fn jp(&mut self, take: bool) {
+        let nn = self.fetch16();
+        if take {
+            self.bus.tick();
+            self.regs.pc = nn;
+        }
+    }
+
+    fn call(&mut self, take: bool) {
+        let nn = self.fetch16();
+        if take {
+            self.push16(self.regs.pc); // internal tick + 2 writes
+            self.regs.pc = nn;
+        }
+    }
+
     pub(crate) fn execute(&mut self, op: u8) {
         match op {
             0x00 => {} // NOP
@@ -409,7 +442,57 @@ impl Cpu {
                 self.regs.set_flag(Z, false);
             }
             0xCB => self.execute_cb(),
-            _ => unimplemented!("opcode {op:#04X} at {:#06X}", self.regs.pc.wrapping_sub(1)),
+            // JR / JR cc
+            0x18 => self.jr(true),
+            0x20 | 0x28 | 0x30 | 0x38 => {
+                let take = self.condition(op);
+                self.jr(take);
+            }
+            // JP / JP cc / JP (HL)
+            0xC3 => self.jp(true),
+            0xC2 | 0xCA | 0xD2 | 0xDA => {
+                let take = self.condition(op);
+                self.jp(take);
+            }
+            0xE9 => self.regs.pc = self.regs.hl(),
+            // CALL / CALL cc
+            0xCD => self.call(true),
+            0xC4 | 0xCC | 0xD4 | 0xDC => {
+                let take = self.condition(op);
+                self.call(take);
+            }
+            // RET / RET cc / RETI
+            0xC9 => {
+                let pc = self.pop16();
+                self.bus.tick();
+                self.regs.pc = pc;
+            }
+            0xC0 | 0xC8 | 0xD0 | 0xD8 => {
+                self.bus.tick(); // condition check costs an internal cycle
+                if self.condition(op) {
+                    let pc = self.pop16();
+                    self.bus.tick();
+                    self.regs.pc = pc;
+                }
+            }
+            0xD9 => {
+                // RETI — like RET but IME is restored immediately
+                let pc = self.pop16();
+                self.bus.tick();
+                self.regs.pc = pc;
+                self.ime = true;
+            }
+            // RST — vector = op & 0x38
+            0xC7 | 0xCF | 0xD7 | 0xDF | 0xE7 | 0xEF | 0xF7 | 0xFF => {
+                self.push16(self.regs.pc);
+                self.regs.pc = (op & 0x38) as u16;
+            }
+            // DI / EI / HALT / STOP land in Task 14
+            0xF3 | 0xFB | 0x76 | 0x10 => todo!("task 14"),
+            // invalid opcodes — real hardware locks up; fail loudly during development
+            0xD3 | 0xDB | 0xDD | 0xE3 | 0xE4 | 0xEB | 0xEC | 0xED | 0xF4 | 0xFC | 0xFD => {
+                panic!("invalid opcode {op:#04X} at {:#06X}", self.regs.pc.wrapping_sub(1));
+            }
         }
     }
 }

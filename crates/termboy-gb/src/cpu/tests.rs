@@ -292,3 +292,73 @@ fn cb_bit_res_set_on_hl() {
     cpu.step();
     assert_eq!(cpu.bus.read(0xC000), 0x80);
 }
+
+#[test]
+fn jr_taken_timing() {
+    let mut cpu = cpu_with(&[0x20, 0x05, 0x20, 0x05]); // JR NZ,+5
+    cpu.regs.set_flag(Z, false);
+    cpu.step(); // taken: lands on 0x107
+    assert_eq!(cpu.regs.pc, 0x107);
+    assert_eq!(cpu.bus.cycles, 12);
+}
+
+#[test]
+fn jr_untaken_timing() {
+    let mut cpu = cpu_with(&[0x20, 0x05]); // JR NZ,+5 with Z set
+    cpu.regs.set_flag(Z, true);
+    cpu.step();
+    assert_eq!(cpu.regs.pc, 0x102);
+    assert_eq!(cpu.bus.cycles, 8);
+}
+
+#[test]
+fn jr_negative_offset() {
+    let mut cpu = cpu_with(&[0x18, 0xFE]); // JR -2: jump to itself
+    cpu.step();
+    assert_eq!(cpu.regs.pc, 0x100);
+}
+
+#[test]
+fn call_and_ret_roundtrip() {
+    // 0x100: CALL 0x110 ; 0x103: NOP ... 0x110: RET
+    let mut prog = vec![0xCD, 0x10, 0x01, 0x00];
+    prog.resize(0x11, 0x00);
+    prog[0x10] = 0xC9;
+    let mut cpu = cpu_with(&prog);
+    let sp0 = cpu.regs.sp;
+    cpu.step(); // CALL: 24 T
+    assert_eq!(cpu.regs.pc, 0x110);
+    assert_eq!(cpu.regs.sp, sp0 - 2);
+    assert_eq!(cpu.bus.cycles, 24);
+    cpu.step(); // RET: 16 T
+    assert_eq!(cpu.regs.pc, 0x103);
+    assert_eq!(cpu.regs.sp, sp0);
+    assert_eq!(cpu.bus.cycles, 24 + 16);
+}
+
+#[test]
+fn ret_cc_untaken_timing() {
+    let mut cpu = cpu_with(&[0xC8]); // RET Z, untaken
+    cpu.regs.set_flag(Z, false);
+    cpu.step();
+    assert_eq!(cpu.bus.cycles, 8); // 2 M-cycles untaken
+}
+
+#[test]
+fn rst_pushes_and_vectors() {
+    let mut cpu = cpu_with(&[0xEF]); // RST 0x28
+    let sp0 = cpu.regs.sp;
+    cpu.step();
+    assert_eq!(cpu.regs.pc, 0x28);
+    assert_eq!(cpu.regs.sp, sp0 - 2);
+    assert_eq!(cpu.bus.cycles, 16);
+}
+
+#[test]
+fn jp_hl_is_one_mcycle() {
+    let mut cpu = cpu_with(&[0xE9]); // JP (HL)
+    cpu.regs.set_hl(0x1234);
+    cpu.step();
+    assert_eq!(cpu.regs.pc, 0x1234);
+    assert_eq!(cpu.bus.cycles, 4);
+}
