@@ -5,6 +5,10 @@ version = 4
 [[package]]
 name = "termboy"
 version = "0.1.0"
+dependencies = [
+ "termboy-core",
+ "termboy-gb",
+]
 
 [[package]]
 name = "termboy-core"
