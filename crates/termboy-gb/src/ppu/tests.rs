@@ -206,3 +206,85 @@ fn window_requires_wy_hit() {
     let line = render_one_line(&mut ppu, 0);
     assert_eq!(line[0], 0);
 }
+
+pub fn put_sprite(ppu: &mut Ppu, i: usize, y: u8, x: u8, tile: u8, attr: u8) {
+    ppu.oam[i * 4] = y;
+    ppu.oam[i * 4 + 1] = x;
+    ppu.oam[i * 4 + 2] = tile;
+    ppu.oam[i * 4 + 3] = attr;
+}
+
+fn sprite_ppu() -> Ppu {
+    let mut ppu = Ppu::new();
+    ppu.lcdc = LCDC_LCD_ON | LCDC_BG_ON | LCDC_OBJ_ON | LCDC_TILE_DATA;
+    ppu.bgp = 0b11_10_01_00;
+    ppu.obp0 = 0b11_10_01_00;
+    ppu.obp1 = 0b00_01_10_11; // inverted, to tell palettes apart
+    put_tile(&mut ppu, 2, 1); // sprite tile: solid color 1
+    put_tile(&mut ppu, 3, 2); // second sprite tile: solid color 2
+    ppu
+}
+
+#[test]
+fn sprite_draws_at_position_with_obp0() {
+    let mut ppu = sprite_ppu();
+    put_sprite(&mut ppu, 0, 16, 16, 2, 0); // at screen (8,0)
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(line[7], 0);
+    assert_eq!(&line[8..16], &[1; 8]);
+    assert_eq!(line[16], 0);
+}
+
+#[test]
+fn obp1_and_transparency() {
+    let mut ppu = sprite_ppu();
+    put_sprite(&mut ppu, 0, 16, 8, 2, 0x10); // OBP1: color 1 -> shade 2
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(line[0], 2);
+}
+
+#[test]
+fn lower_x_wins_overlap() {
+    let mut ppu = sprite_ppu();
+    put_sprite(&mut ppu, 0, 16, 20, 2, 0); // OAM 0 at x=12, color 1
+    put_sprite(&mut ppu, 1, 16, 16, 3, 0); // OAM 1 at x=8, color 2 — lower x wins
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(line[12], 2); // overlap pixels show sprite 1
+    assert_eq!(line[16], 1); // past sprite 1's right edge, sprite 0 shows
+}
+
+#[test]
+fn ten_sprite_limit_in_oam_order() {
+    let mut ppu = sprite_ppu();
+    for i in 0..11 {
+        put_sprite(&mut ppu, i, 16, 8 + 8 * i as u8, 2, 0);
+    }
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(line[8 * 9], 1); // 10th sprite (OAM 9) drawn
+    assert_eq!(line[8 * 10], 0); // 11th (OAM 10) dropped
+}
+
+#[test]
+fn bg_over_obj_hides_behind_nonzero_bg() {
+    let mut ppu = sprite_ppu();
+    put_tile(&mut ppu, 1, 2);
+    ppu.vram[0x1800] = 1; // BG tile (0,0) = color 2 (nonzero)
+    put_sprite(&mut ppu, 0, 16, 12, 2, 0x80); // sx=4: half over BG tile, half past it
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(line[4], 2); // BG color 2 wins over the behind-BG sprite
+    assert_eq!(line[8], 1); // BG color 0 there -> sprite shows
+}
+
+#[test]
+fn tall_sprites_and_yflip() {
+    let mut ppu = sprite_ppu();
+    ppu.lcdc |= LCDC_OBJ_TALL;
+    // tile pair 4/5: top solid color 1, bottom solid color 2
+    put_tile(&mut ppu, 4, 1);
+    put_tile(&mut ppu, 5, 2);
+    put_sprite(&mut ppu, 0, 16, 8, 4, 0); // rows 0-7 tile 4, 8-15 tile 5
+    assert_eq!(render_one_line(&mut ppu, 0)[0], 1);
+    assert_eq!(render_one_line(&mut ppu, 8)[0], 2);
+    put_sprite(&mut ppu, 0, 16, 8, 4, 0x40); // y-flipped: bottom tile on top
+    assert_eq!(render_one_line(&mut ppu, 0)[0], 2);
+}

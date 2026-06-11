@@ -54,8 +54,58 @@ impl Ppu {
     }
 
     fn draw_sprites(&self, line: &mut [u8; 160], bg_color: &[u8; 160]) {
-        // implemented in Task 4
-        let _ = (line, bg_color);
+        let height: i16 = if self.lcdc & LCDC_OBJ_TALL != 0 { 16 } else { 8 };
+        let ly = self.ly as i16;
+
+        // OAM scan: first 10 sprites overlapping this line, in OAM order.
+        let mut hits: Vec<(i16, usize)> = Vec::with_capacity(10); // (x, oam index)
+        for i in 0..40 {
+            let sy = self.oam[i * 4] as i16 - 16;
+            if ly >= sy && ly < sy + height {
+                hits.push((self.oam[i * 4 + 1] as i16 - 8, i));
+                if hits.len() == 10 {
+                    break;
+                }
+            }
+        }
+        // Priority: lowest X wins, ties broken by OAM index (DMG rule).
+        hits.sort_by_key(|&(x, i)| (x, i));
+
+        for px in 0..160i16 {
+            // Winner = highest-priority sprite with an opaque pixel here.
+            for &(sx, i) in &hits {
+                if px < sx || px >= sx + 8 {
+                    continue;
+                }
+                let attr = self.oam[i * 4 + 3];
+                let mut row = ly - (self.oam[i * 4] as i16 - 16);
+                if attr & 0x40 != 0 {
+                    row = height - 1 - row; // y-flip
+                }
+                let mut tile = self.oam[i * 4 + 2];
+                if height == 16 {
+                    tile &= 0xFE; // rows 8-15 fall through into the next tile
+                }
+                let mut col = (px - sx) as u8;
+                if attr & 0x20 != 0 {
+                    col = 7 - col; // x-flip
+                }
+                // OBJ tiles always use unsigned 0x8000 addressing.
+                let base = tile as usize * 16 + row as usize * 2;
+                let lo = (self.vram[base] >> (7 - col)) & 1;
+                let hi = (self.vram[base + 1] >> (7 - col)) & 1;
+                let color = (hi << 1) | lo;
+                if color == 0 {
+                    continue; // transparent: next sprite may win this pixel
+                }
+                // The WINNER's BG-over-OBJ flag decides; losers don't get a say.
+                if attr & 0x80 == 0 || bg_color[px as usize] == 0 {
+                    let palette = if attr & 0x10 != 0 { self.obp1 } else { self.obp0 };
+                    line[px as usize] = (palette >> (color * 2)) & 3;
+                }
+                break;
+            }
+        }
     }
 
     /// BG/window tile pixel via LCDC bit-4 addressing. Returns color number 0-3.
