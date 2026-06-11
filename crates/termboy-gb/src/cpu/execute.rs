@@ -56,6 +56,64 @@ impl Cpu {
         }
     }
 
+    /// ALU op decode for 0x80-0xBF and the d8 variants: index = (op >> 3) & 7.
+    pub(crate) fn alu(&mut self, kind: u8, v: u8) {
+        match kind {
+            0 => self.add_a(v, false),
+            1 => self.add_a(v, true),
+            2 => self.sub_a(v, false, true),
+            3 => self.sub_a(v, true, true),
+            4 => {
+                // AND
+                self.regs.a &= v;
+                let z = self.regs.a == 0;
+                self.regs.f = 0;
+                self.regs.set_flag(Z, z);
+                self.regs.set_flag(H, true);
+            }
+            5 => {
+                // XOR
+                self.regs.a ^= v;
+                let z = self.regs.a == 0;
+                self.regs.f = 0;
+                self.regs.set_flag(Z, z);
+            }
+            6 => {
+                // OR
+                self.regs.a |= v;
+                let z = self.regs.a == 0;
+                self.regs.f = 0;
+                self.regs.set_flag(Z, z);
+            }
+            _ => self.sub_a(v, false, false), // CP
+        }
+    }
+
+    fn add_a(&mut self, v: u8, with_carry: bool) {
+        let c = (with_carry && self.regs.flag(C)) as u8;
+        let a = self.regs.a;
+        let result = a.wrapping_add(v).wrapping_add(c);
+        self.regs.f = 0;
+        self.regs.set_flag(Z, result == 0);
+        self.regs.set_flag(H, (a & 0x0F) + (v & 0x0F) + c > 0x0F);
+        self.regs.set_flag(C, a as u16 + v as u16 + c as u16 > 0xFF);
+        self.regs.a = result;
+    }
+
+    fn sub_a(&mut self, v: u8, with_carry: bool, store: bool) {
+        let c = (with_carry && self.regs.flag(C)) as u8;
+        let a = self.regs.a;
+        let result = a.wrapping_sub(v).wrapping_sub(c);
+        self.regs.f = 0;
+        self.regs.set_flag(Z, result == 0);
+        self.regs.set_flag(N, true);
+        self.regs.set_flag(H, (a & 0x0F) < (v & 0x0F) + c);
+        self.regs.set_flag(C, (a as u16) < v as u16 + c as u16);
+        if store {
+            self.regs.a = result;
+        }
+    }
+
     pub(crate) fn execute(&mut self, op: u8) {
         match op {
             0x00 => {} // NOP
@@ -186,6 +244,78 @@ impl Cpu {
                 self.regs.set_flag(H, (sp & 0x0F) + (e & 0x0F) > 0x0F);
                 self.regs.set_flag(C, (sp & 0xFF) + (e & 0xFF) > 0xFF);
                 self.regs.set_hl(sp.wrapping_add(e));
+            }
+            // ALU A,r and ALU A,d8
+            0x80..=0xBF => {
+                let v = self.get_r(op & 7);
+                self.alu((op >> 3) & 7, v);
+            }
+            0xC6 | 0xCE | 0xD6 | 0xDE | 0xE6 | 0xEE | 0xF6 | 0xFE => {
+                let v = self.fetch();
+                self.alu((op >> 3) & 7, v);
+            }
+            // INC r / DEC r (C flag untouched)
+            0x04 | 0x0C | 0x14 | 0x1C | 0x24 | 0x2C | 0x34 | 0x3C => {
+                let i = (op >> 3) & 7;
+                let v = self.get_r(i).wrapping_add(1);
+                self.set_r(i, v);
+                self.regs.set_flag(Z, v == 0);
+                self.regs.set_flag(N, false);
+                self.regs.set_flag(H, v & 0x0F == 0);
+            }
+            0x05 | 0x0D | 0x15 | 0x1D | 0x25 | 0x2D | 0x35 | 0x3D => {
+                let i = (op >> 3) & 7;
+                let v = self.get_r(i).wrapping_sub(1);
+                self.set_r(i, v);
+                self.regs.set_flag(Z, v == 0);
+                self.regs.set_flag(N, true);
+                self.regs.set_flag(H, v & 0x0F == 0x0F);
+            }
+            // DAA
+            0x27 => {
+                let mut a = self.regs.a;
+                let mut carry = self.regs.flag(C);
+                if !self.regs.flag(N) {
+                    let mut adjust = 0u8;
+                    if self.regs.flag(H) || a & 0x0F > 0x09 {
+                        adjust |= 0x06;
+                    }
+                    if carry || a > 0x99 {
+                        adjust |= 0x60;
+                        carry = true;
+                    }
+                    a = a.wrapping_add(adjust);
+                } else {
+                    let mut adjust = 0u8;
+                    if self.regs.flag(H) {
+                        adjust |= 0x06;
+                    }
+                    if carry {
+                        adjust |= 0x60;
+                    }
+                    a = a.wrapping_sub(adjust);
+                }
+                self.regs.a = a;
+                self.regs.set_flag(Z, a == 0);
+                self.regs.set_flag(H, false);
+                self.regs.set_flag(C, carry);
+            }
+            // CPL / SCF / CCF
+            0x2F => {
+                self.regs.a = !self.regs.a;
+                self.regs.set_flag(N, true);
+                self.regs.set_flag(H, true);
+            }
+            0x37 => {
+                self.regs.set_flag(N, false);
+                self.regs.set_flag(H, false);
+                self.regs.set_flag(C, true);
+            }
+            0x3F => {
+                let c = self.regs.flag(C);
+                self.regs.set_flag(N, false);
+                self.regs.set_flag(H, false);
+                self.regs.set_flag(C, !c);
             }
             _ => unimplemented!("opcode {op:#04X} at {:#06X}", self.regs.pc.wrapping_sub(1)),
         }

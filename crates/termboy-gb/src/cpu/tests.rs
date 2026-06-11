@@ -121,3 +121,82 @@ fn ld_hl_sp_plus_e_sets_carries_from_low_byte() {
     assert!(!cpu.regs.flag(Z) && !cpu.regs.flag(N));
     assert_eq!(cpu.bus.cycles, 12);
 }
+
+#[test]
+fn add_sets_half_and_full_carry() {
+    let mut cpu = cpu_with(&[0x80]); // ADD A,B
+    cpu.regs.a = 0x3C;
+    cpu.regs.b = 0xC4;
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x00);
+    assert!(cpu.regs.flag(Z) && cpu.regs.flag(H) && cpu.regs.flag(C));
+    assert!(!cpu.regs.flag(N));
+}
+
+#[test]
+fn adc_includes_carry_in_half_carry() {
+    let mut cpu = cpu_with(&[0x88]); // ADC A,B
+    cpu.regs.a = 0x0F;
+    cpu.regs.b = 0x00;
+    cpu.regs.set_flag(C, true);
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x10);
+    assert!(cpu.regs.flag(H) && !cpu.regs.flag(C));
+}
+
+#[test]
+fn sbc_borrows_through_carry() {
+    let mut cpu = cpu_with(&[0x98]); // SBC A,B
+    cpu.regs.a = 0x00;
+    cpu.regs.b = 0x00;
+    cpu.regs.set_flag(C, true);
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0xFF);
+    assert!(cpu.regs.flag(N) && cpu.regs.flag(H) && cpu.regs.flag(C));
+}
+
+#[test]
+fn cp_sets_flags_without_storing() {
+    let mut cpu = cpu_with(&[0xFE, 0x42]); // CP 0x42
+    cpu.regs.a = 0x42;
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x42);
+    assert!(cpu.regs.flag(Z) && cpu.regs.flag(N));
+}
+
+#[test]
+fn inc_preserves_carry_dec_sets_n() {
+    let mut cpu = cpu_with(&[0x3C, 0x05]); // INC A ; DEC B
+    cpu.regs.a = 0x0F;
+    cpu.regs.b = 0x10;
+    cpu.regs.set_flag(C, true);
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x10);
+    assert!(cpu.regs.flag(H) && cpu.regs.flag(C) && !cpu.regs.flag(N));
+    cpu.step();
+    assert_eq!(cpu.regs.b, 0x0F);
+    assert!(cpu.regs.flag(N) && cpu.regs.flag(H));
+}
+
+#[test]
+fn daa_after_bcd_add() {
+    let mut cpu = cpu_with(&[0x80, 0x27]); // ADD A,B ; DAA — 0x15 + 0x27 = BCD 42
+    cpu.regs.a = 0x15;
+    cpu.regs.b = 0x27;
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x42);
+}
+
+#[test]
+fn scf_ccf_cpl() {
+    let mut cpu = cpu_with(&[0x37, 0x3F, 0x2F]); // SCF ; CCF ; CPL
+    cpu.regs.a = 0xAA;
+    cpu.step();
+    assert!(cpu.regs.flag(C));
+    cpu.step();
+    assert!(!cpu.regs.flag(C));
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x55);
+    assert!(cpu.regs.flag(N) && cpu.regs.flag(H));
+}
