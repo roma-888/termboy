@@ -7,6 +7,7 @@ mod input;
 mod screen;
 
 use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -17,6 +18,48 @@ use crossterm::event::{
 use crossterm::{cursor, execute, terminal};
 use termboy_core::{Buttons, Core};
 use termboy_gb::GameBoy;
+
+fn sav_path(rom_path: &str) -> PathBuf {
+    Path::new(rom_path).with_extension("sav")
+}
+
+/// Atomic write: a crash mid-write must never corrupt an existing save.
+fn write_save(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("sav.tmp");
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Write the battery save if it changed since the last flush.
+fn flush_save(gb: &GameBoy, sav: &Path, last: &mut Option<Vec<u8>>) {
+    if let Some(data) = gb.save_ram() {
+        if last.as_deref() != Some(&data[..]) && write_save(sav, &data).is_ok() {
+            *last = Some(data);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sav_path_replaces_extension() {
+        assert_eq!(sav_path("roms/tetris.gb"), PathBuf::from("roms/tetris.sav"));
+        assert_eq!(sav_path("pokemon.red.gb"), PathBuf::from("pokemon.red.sav"));
+    }
+
+    #[test]
+    fn write_save_is_atomic_and_readable() {
+        let dir = std::env::temp_dir().join("termboy-test-sav");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("game.sav");
+        write_save(&path, b"hello").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+        assert!(!path.with_extension("sav.tmp").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
 
 /// 4_194_304 Hz / 70_224 cycles ≈ 59.73 fps.
 const FRAME_TIME: Duration = Duration::from_nanos(70_224 * 1_000_000_000 / 4_194_304);
@@ -36,21 +79,25 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let gb = match GameBoy::new(rom) {
+    let mut gb = match GameBoy::new(rom) {
         Ok(gb) => gb,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
     };
+    let sav = sav_path(path);
+    if let Ok(data) = std::fs::read(&sav) {
+        gb.load_ram(&data);
+    }
     if headless {
-        run_headless(gb)
+        run_headless(gb, &sav)
     } else {
-        run_terminal(gb, exact)
+        run_terminal(gb, exact, &sav)
     }
 }
 
-fn run_headless(mut gb: GameBoy) -> ExitCode {
+fn run_headless(mut gb: GameBoy, sav: &Path) -> ExitCode {
     let mut printed = 0;
     for _ in 0..60 * 60 {
         // run up to 60 emulated seconds
@@ -63,6 +110,8 @@ fn run_headless(mut gb: GameBoy) -> ExitCode {
         }
     }
     println!();
+    let mut last = None;
+    flush_save(&gb, sav, &mut last);
     ExitCode::SUCCESS
 }
 
@@ -107,7 +156,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn run_terminal(mut gb: GameBoy, exact: bool) -> ExitCode {
+fn run_terminal(mut gb: GameBoy, exact: bool, sav: &Path) -> ExitCode {
     let mut screen = screen::Screen::new(160, 144);
     let (need_cols, need_rows) = screen.required_size();
     let mut last_size = (0u16, 0u16);
@@ -134,13 +183,15 @@ fn run_terminal(mut gb: GameBoy, exact: bool) -> ExitCode {
 
     let mut out = String::new();
     let mut next_frame = Instant::now();
-    loop {
+    let mut last_saved: Option<Vec<u8>> = gb.save_ram();
+    let mut frames: u32 = 0;
+    let code = 'game: loop {
         // Input: Esc quits, everything else goes to the tracker.
         let now = Instant::now();
         while event::poll(Duration::ZERO).unwrap_or(false) {
             match event::read() {
                 Ok(Event::Key(k)) if k.code == KeyCode::Esc && k.kind == KeyEventKind::Press => {
-                    return ExitCode::SUCCESS;
+                    break 'game ExitCode::SUCCESS;
                 }
                 Ok(Event::Key(k)) => input.handle(&k, now),
                 Ok(Event::Resize(..)) => screen.invalidate(),
@@ -185,6 +236,11 @@ fn run_terminal(mut gb: GameBoy, exact: bool) -> ExitCode {
             std::io::stdout().flush().ok();
         }
 
+        frames += 1;
+        if frames % 300 == 0 {
+            flush_save(&gb, sav, &mut last_saved); // every ~5 seconds
+        }
+
         next_frame += FRAME_TIME;
         let now = Instant::now();
         if next_frame > now {
@@ -192,5 +248,7 @@ fn run_terminal(mut gb: GameBoy, exact: bool) -> ExitCode {
         } else {
             next_frame = now; // fell behind: don't try to catch up in a burst
         }
-    }
+    };
+    flush_save(&gb, sav, &mut last_saved);
+    code
 }
