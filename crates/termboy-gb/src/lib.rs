@@ -1,5 +1,6 @@
 pub mod bus;
 pub mod cartridge;
+pub mod joypad;
 pub mod cpu;
 pub mod ppu;
 pub mod serial;
@@ -57,8 +58,10 @@ impl GameBoy {
 }
 
 impl Core for GameBoy {
-    fn run_frame(&mut self, _buttons: Buttons) -> &FrameBuffer {
-        // Joypad input lands in Milestone 3.
+    fn run_frame(&mut self, buttons: Buttons) -> &FrameBuffer {
+        if self.cpu.bus.joypad.set_buttons(buttons) {
+            self.cpu.bus.intf |= bus::IF_JOYPAD;
+        }
         self.cpu.bus.ppu.frame_ready = false;
         let cap = self.cpu.bus.cycles + CYCLES_PER_FRAME;
         while !self.cpu.bus.ppu.frame_ready && self.cpu.bus.cycles < cap {
@@ -98,6 +101,14 @@ mod tests {
         let c1 = gb.cycles();
         gb.run_frame(Buttons::default());
         assert_eq!(gb.cycles() - c1, CYCLES_PER_FRAME);
+    }
+
+    #[test]
+    fn buttons_reach_p1_and_raise_irq() {
+        let mut gb = GameBoy::new(spin_rom()).unwrap();
+        gb.run_frame(Buttons::A);
+        // IF bit 4 was raised by the new press (spin rom never clears IF)
+        assert_eq!(gb.cpu.bus.intf & bus::IF_JOYPAD, bus::IF_JOYPAD);
     }
 
     #[test]

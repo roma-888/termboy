@@ -3,6 +3,7 @@
 //! what keeps all components in hardware-true lockstep (design spec §3).
 
 use crate::cartridge::Cartridge;
+use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
 use crate::timer::Timer;
@@ -20,6 +21,7 @@ pub struct Bus {
     hram: [u8; 0x7F],
     pub timer: Timer,
     pub serial: Serial,
+    pub joypad: Joypad,
     /// IF (0xFF0F) and IE (0xFFFF)
     pub intf: u8,
     pub inte: u8,
@@ -39,6 +41,7 @@ impl Bus {
             hram: [0; 0x7F],
             timer: Timer::default(),
             serial: Serial::default(),
+            joypad: Joypad::default(),
             intf: 0,
             inte: 0,
             cycles: 0,
@@ -97,6 +100,7 @@ impl Bus {
 
     fn read_io(&mut self, addr: u16) -> u8 {
         match addr {
+            0xFF00 => self.joypad.read(),
             0xFF01 => self.serial.read_sb(),
             0xFF02 => self.serial.read_sc(),
             0xFF04 => self.timer.read_div(),
@@ -122,6 +126,7 @@ impl Bus {
 
     fn write_io(&mut self, addr: u16, value: u8) {
         match addr {
+            0xFF00 => self.joypad.write(value),
             0xFF01 => self.serial.write_sb(value),
             0xFF02 => self.serial.write_sc(value),
             0xFF04 => self.timer.write_div(),
@@ -154,6 +159,7 @@ impl Bus {
 mod tests {
     use super::*;
     use crate::cartridge::Cartridge;
+use crate::joypad::Joypad;
 
     fn bus() -> Bus {
         let mut rom = vec![0u8; 0x8000];
@@ -213,6 +219,14 @@ mod tests {
         b.tick();
         assert_eq!(b.read(0xFE00), 0x00);
         assert_eq!(b.read(0xFE9F), 0x9F); // all 160 bytes landed
+    }
+
+    #[test]
+    fn joypad_routes_through_p1() {
+        let mut b = bus();
+        assert_eq!(b.read(0xFF00), 0xFF); // post-boot: nothing selected, nothing pressed
+        b.write(0xFF00, 0x20);
+        assert_eq!(b.read(0xFF00), 0xEF); // directions selected, none pressed
     }
 
     #[test]
