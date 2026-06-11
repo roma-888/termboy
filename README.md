@@ -6,4 +6,10 @@ Written in Rust. Targets the original Game Boy (DMG) first, with an architecture
 
 ## Status
 
-Early design phase — nothing to run yet.
+Milestone 2 complete: plays nothing yet (input lands in Milestone 3), but
+renders for real — Blargg cpu_instrs + instr_timing and dmg-acid2 (pixel-exact
+vs the official reference) all pass.
+
+- `cargo run --release -p termboy -- <rom.gb>` — render a ROM (needs a 160x72 truecolor terminal, Esc quits)
+- `cargo run --release -p termboy -- --headless <rom.gb>` — run headless, print serial output
+- `cargo test --workspace` — full test suite including hardware test ROMs
