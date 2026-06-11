@@ -3,6 +3,7 @@
 //! what keeps all components in hardware-true lockstep (design spec §3).
 
 use crate::cartridge::Cartridge;
+use crate::ppu::Ppu;
 use crate::serial::Serial;
 use crate::timer::Timer;
 
@@ -14,9 +15,8 @@ pub const IF_JOYPAD: u8 = 0x10;
 
 pub struct Bus {
     pub cart: Cartridge,
-    vram: [u8; 0x2000],
+    pub ppu: Ppu,
     wram: [u8; 0x2000],
-    oam: [u8; 0xA0],
     hram: [u8; 0x7F],
     pub timer: Timer,
     pub serial: Serial,
@@ -31,9 +31,8 @@ impl Bus {
     pub fn new(cart: Cartridge) -> Self {
         Self {
             cart,
-            vram: [0; 0x2000],
+            ppu: Ppu::new(),
             wram: [0; 0x2000],
-            oam: [0; 0xA0],
             hram: [0; 0x7F],
             timer: Timer::default(),
             serial: Serial::default(),
@@ -43,24 +42,25 @@ impl Bus {
         }
     }
 
-    /// Advance one M-cycle. PPU and OAM-DMA join this loop in Milestone 2.
+    /// Advance one M-cycle: timer and PPU per T-cycle, OAM-DMA per M-cycle.
     pub fn tick(&mut self) {
         self.cycles += 4;
         for _ in 0..4 {
             if self.timer.tick() {
                 self.intf |= IF_TIMER;
             }
+            self.intf |= self.ppu.tick();
         }
     }
 
     pub fn read(&mut self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => self.cart.read_rom(addr),
-            0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize],
+            0x8000..=0x9FFF => self.ppu.vram[(addr - 0x8000) as usize],
             0xA000..=0xBFFF => self.cart.read_ram(addr),
             0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize],
             0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize],
-            0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
+            0xFE00..=0xFE9F => self.ppu.oam[(addr - 0xFE00) as usize],
             0xFEA0..=0xFEFF => 0xFF,
             0xFF00..=0xFF7F => self.read_io(addr),
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
@@ -71,11 +71,11 @@ impl Bus {
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x7FFF => self.cart.write_rom(addr, value),
-            0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize] = value,
+            0x8000..=0x9FFF => self.ppu.vram[(addr - 0x8000) as usize] = value,
             0xA000..=0xBFFF => self.cart.write_ram(addr, value),
             0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize] = value,
             0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize] = value,
-            0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
+            0xFE00..=0xFE9F => self.ppu.oam[(addr - 0xFE00) as usize] = value,
             0xFEA0..=0xFEFF => {}
             0xFF00..=0xFF7F => self.write_io(addr, value),
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
@@ -92,9 +92,17 @@ impl Bus {
             0xFF06 => self.timer.tma,
             0xFF07 => self.timer.read_tac(),
             0xFF0F => self.intf | 0xE0,
-            // LY stub until the PPU exists (Milestone 2): report line 144 so
-            // ROMs polling for vblank make progress.
-            0xFF44 => 0x90,
+            0xFF40 => self.ppu.lcdc,
+            0xFF41 => self.ppu.read_stat(),
+            0xFF42 => self.ppu.scy,
+            0xFF43 => self.ppu.scx,
+            0xFF44 => self.ppu.ly,
+            0xFF45 => self.ppu.lyc,
+            0xFF47 => self.ppu.bgp,
+            0xFF48 => self.ppu.obp0,
+            0xFF49 => self.ppu.obp1,
+            0xFF4A => self.ppu.wy,
+            0xFF4B => self.ppu.wx,
             _ => 0xFF,
         }
     }
@@ -108,6 +116,17 @@ impl Bus {
             0xFF06 => self.timer.tma = value,
             0xFF07 => self.timer.write_tac(value),
             0xFF0F => self.intf = value & 0x1F,
+            0xFF40 => self.ppu.write_lcdc(value),
+            0xFF41 => self.ppu.write_stat(value),
+            0xFF42 => self.ppu.scy = value,
+            0xFF43 => self.ppu.scx = value,
+            0xFF44 => {} // LY is read-only
+            0xFF45 => self.ppu.lyc = value,
+            0xFF47 => self.ppu.bgp = value,
+            0xFF48 => self.ppu.obp0 = value,
+            0xFF49 => self.ppu.obp1 = value,
+            0xFF4A => self.ppu.wy = value,
+            0xFF4B => self.ppu.wx = value,
             _ => {}
         }
     }
@@ -162,8 +181,12 @@ mod tests {
     }
 
     #[test]
-    fn ly_stub_reports_vblank_line() {
+    fn ly_register_reflects_ppu_state() {
         let mut b = bus();
-        assert_eq!(b.read(0xFF44), 0x90);
+        assert_eq!(b.read(0xFF44), 0);
+        for _ in 0..114 {
+            b.tick(); // 456 T-cycles = one scanline
+        }
+        assert_eq!(b.read(0xFF44), 1);
     }
 }
