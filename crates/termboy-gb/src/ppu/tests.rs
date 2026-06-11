@@ -145,3 +145,64 @@ fn bg_disabled_renders_shade_zero() {
     let line = render_one_line(&mut ppu, 0);
     assert_eq!(&line[..], &[0u8; 160][..]);
 }
+
+#[test]
+fn window_overlays_bg_from_wx_minus_7() {
+    let mut ppu = Ppu::new();
+    ppu.lcdc = LCDC_LCD_ON | LCDC_BG_ON | LCDC_WIN_ON | LCDC_TILE_DATA | LCDC_WIN_MAP;
+    ppu.bgp = 0b11_10_01_00;
+    put_tile(&mut ppu, 1, 3);
+    // window map at 0x9C00 all tile 1; BG map stays tile 0
+    for i in 0..32 * 32 {
+        ppu.vram[0x1C00 + i] = 1;
+    }
+    ppu.wy = 0;
+    ppu.wx = 17; // window starts at screen x=10
+    ppu.wy_hit = true;
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(&line[0..10], &[0; 10]);
+    assert_eq!(&line[10..160], &[3; 150][..]);
+}
+
+#[test]
+fn window_line_counter_freezes_while_hidden() {
+    let mut ppu = Ppu::new();
+    ppu.lcdc = LCDC_LCD_ON | LCDC_BG_ON | LCDC_WIN_ON | LCDC_TILE_DATA | LCDC_WIN_MAP;
+    ppu.bgp = 0b11_10_01_00;
+    // window map row 0 = tile 1 (shade 3); row 1 = tile 0
+    put_tile(&mut ppu, 1, 3);
+    for i in 0..32 {
+        ppu.vram[0x1C00 + i] = 1;
+    }
+    ppu.wy = 0;
+    ppu.wy_hit = true;
+    ppu.wx = 7;
+    let l0 = render_one_line(&mut ppu, 0); // window line 0 -> shade 3
+    assert_eq!(l0[0], 3);
+    ppu.wx = 200; // hide the window for a line
+    render_one_line(&mut ppu, 1);
+    ppu.wx = 7; // bring it back: must resume at window line 1 (map row 0 still)
+    let l2 = render_one_line(&mut ppu, 2);
+    assert_eq!(l2[0], 3);
+    // after 7 more visible window lines we reach map row 1 (tile 0)
+    for ly in 3..10 {
+        render_one_line(&mut ppu, ly);
+    }
+    let l10 = render_one_line(&mut ppu, 10); // window line 9 -> map row 1 -> shade 0
+    assert_eq!(l10[0], 0);
+}
+
+#[test]
+fn window_requires_wy_hit() {
+    let mut ppu = Ppu::new();
+    ppu.lcdc = LCDC_LCD_ON | LCDC_BG_ON | LCDC_WIN_ON | LCDC_TILE_DATA | LCDC_WIN_MAP;
+    ppu.bgp = 0b11_10_01_00;
+    put_tile(&mut ppu, 1, 3);
+    for i in 0..32 {
+        ppu.vram[0x1C00 + i] = 1;
+    }
+    ppu.wx = 7;
+    ppu.wy_hit = false; // WY never matched this frame
+    let line = render_one_line(&mut ppu, 0);
+    assert_eq!(line[0], 0);
+}

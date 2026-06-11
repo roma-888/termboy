@@ -35,8 +35,22 @@ impl Ppu {
     }
 
     fn draw_window(&mut self, line: &mut [u8; 160], bg_color: &mut [u8; 160]) {
-        // implemented in Task 3
-        let _ = (line, bg_color);
+        if self.lcdc & LCDC_WIN_ON == 0 || !self.wy_hit || self.wx > 166 {
+            return;
+        }
+        let map = if self.lcdc & LCDC_WIN_MAP != 0 { 0x1C00 } else { 0x1800 };
+        let wl = self.window_line as usize;
+        let trow = wl / 8;
+        let py = wl % 8;
+        let start = self.wx.saturating_sub(7) as usize;
+        for x in start..160 {
+            let wxp = x + 7 - self.wx as usize; // pixel within the window
+            let tile = self.vram[map + trow * 32 + wxp / 8];
+            let color = self.bg_tile_pixel(tile, wxp % 8, py);
+            bg_color[x] = color;
+            line[x] = (self.bgp >> (color * 2)) & 3;
+        }
+        self.window_line += 1; // only advances on lines the window rendered
     }
 
     fn draw_sprites(&self, line: &mut [u8; 160], bg_color: &[u8; 160]) {
