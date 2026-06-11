@@ -6,10 +6,25 @@ Written in Rust. Targets the original Game Boy (DMG) first, with an architecture
 
 ## Status
 
-Milestone 2 complete: plays nothing yet (input lands in Milestone 3), but
-renders for real — Blargg cpu_instrs + instr_timing and dmg-acid2 (pixel-exact
-vs the official reference) all pass.
+Milestone 3 complete: games are playable. Blargg cpu_instrs + instr_timing
+and dmg-acid2 (pixel-exact vs the official reference) all pass.
 
-- `cargo run --release -p termboy -- <rom.gb>` — render a ROM in any truecolor terminal (pixel-perfect at 160x72+, auto-scaled to fit below that; `--exact` disables scaling; Esc quits)
+- `cargo run --release -p termboy -- <rom.gb>` — play a ROM in any truecolor terminal (pixel-perfect at 160x72+, auto-scaled to fit below that; `--exact` disables scaling)
 - `cargo run --release -p termboy -- --headless <rom.gb>` — run headless, print serial output
 - `cargo test --workspace` — full test suite including hardware test ROMs
+
+## Controls
+
+| Key | Button |
+|-----|--------|
+| Arrow keys | D-pad |
+| X | A |
+| Z | B |
+| Enter | Start |
+| Tab | Select |
+| Esc | Quit |
+
+Input feels best in a terminal supporting the kitty keyboard protocol
+(Ghostty, kitty, WezTerm, recent iTerm2/Alacritty) — real key-release events.
+Elsewhere termboy falls back to timed release driven by OS key repeat; for a
+snappier hold, reduce your OS key-repeat delay.
