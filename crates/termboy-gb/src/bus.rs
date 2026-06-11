@@ -25,6 +25,9 @@ pub struct Bus {
     pub inte: u8,
     /// Total elapsed T-cycles since power-on.
     pub cycles: u64,
+    dma_src: u16,
+    dma_idx: u8, // 0xA0 = idle
+    dma_reg: u8,
 }
 
 impl Bus {
@@ -39,6 +42,9 @@ impl Bus {
             intf: 0,
             inte: 0,
             cycles: 0,
+            dma_src: 0,
+            dma_idx: 0xA0,
+            dma_reg: 0xFF,
         }
     }
 
@@ -50,6 +56,12 @@ impl Bus {
                 self.intf |= IF_TIMER;
             }
             self.intf |= self.ppu.tick();
+        }
+        // OAM DMA: one byte per M-cycle, 160 M-cycles total.
+        if self.dma_idx < 0xA0 {
+            let value = self.read(self.dma_src + self.dma_idx as u16);
+            self.ppu.oam[self.dma_idx as usize] = value;
+            self.dma_idx += 1;
         }
     }
 
@@ -98,6 +110,7 @@ impl Bus {
             0xFF43 => self.ppu.scx,
             0xFF44 => self.ppu.ly,
             0xFF45 => self.ppu.lyc,
+            0xFF46 => self.dma_reg,
             0xFF47 => self.ppu.bgp,
             0xFF48 => self.ppu.obp0,
             0xFF49 => self.ppu.obp1,
@@ -122,6 +135,11 @@ impl Bus {
             0xFF43 => self.ppu.scx = value,
             0xFF44 => {} // LY is read-only
             0xFF45 => self.ppu.lyc = value,
+            0xFF46 => {
+                self.dma_reg = value;
+                self.dma_src = (value as u16) << 8;
+                self.dma_idx = 0;
+            }
             0xFF47 => self.ppu.bgp = value,
             0xFF48 => self.ppu.obp0 = value,
             0xFF49 => self.ppu.obp1 = value,
@@ -178,6 +196,23 @@ mod tests {
             b.tick(); // overflow + 4-cycle reload happen within these 64 T-cycles
         }
         assert_eq!(b.read(0xFF0F) & 0x04, 0x04);
+    }
+
+    #[test]
+    fn oam_dma_copies_160_bytes_over_160_mcycles() {
+        let mut b = bus();
+        for i in 0..0xA0u16 {
+            b.write(0xC000 + i, i as u8);
+        }
+        b.write(0xFF46, 0xC0); // start DMA from 0xC000
+        assert_eq!(b.read(0xFF46), 0xC0); // register reads back
+        for _ in 0..159 {
+            b.tick();
+        }
+        assert_eq!(b.read(0xFE9F), 0x00); // not finished yet
+        b.tick();
+        assert_eq!(b.read(0xFE00), 0x00);
+        assert_eq!(b.read(0xFE9F), 0x9F); // all 160 bytes landed
     }
 
     #[test]
