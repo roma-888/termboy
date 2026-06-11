@@ -2,3 +2,4 @@
 *.gb
 *.gbc
 *.sav
+!crates/termboy-gb/tests/roms/**/*.gb

@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+members = ["crates/termboy-core", "crates/termboy-gb", "crates/termboy"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
