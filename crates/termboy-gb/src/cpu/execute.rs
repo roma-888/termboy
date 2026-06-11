@@ -68,6 +68,77 @@ impl Cpu {
                 let v = self.fetch();
                 self.set_r((op >> 3) & 7, v);
             }
+            // LD A,(rr) / LD (rr),A
+            0x0A => {
+                let a = self.regs.bc();
+                self.regs.a = self.read8(a);
+            }
+            0x1A => {
+                let a = self.regs.de();
+                self.regs.a = self.read8(a);
+            }
+            0x02 => {
+                let a = self.regs.bc();
+                let v = self.regs.a;
+                self.write8(a, v);
+            }
+            0x12 => {
+                let a = self.regs.de();
+                let v = self.regs.a;
+                self.write8(a, v);
+            }
+            // LD (HL±),A and LD A,(HL±)
+            0x22 => {
+                let hl = self.regs.hl();
+                let v = self.regs.a;
+                self.write8(hl, v);
+                self.regs.set_hl(hl.wrapping_add(1));
+            }
+            0x32 => {
+                let hl = self.regs.hl();
+                let v = self.regs.a;
+                self.write8(hl, v);
+                self.regs.set_hl(hl.wrapping_sub(1));
+            }
+            0x2A => {
+                let hl = self.regs.hl();
+                self.regs.a = self.read8(hl);
+                self.regs.set_hl(hl.wrapping_add(1));
+            }
+            0x3A => {
+                let hl = self.regs.hl();
+                self.regs.a = self.read8(hl);
+                self.regs.set_hl(hl.wrapping_sub(1));
+            }
+            // LDH — high page 0xFF00+n / 0xFF00+C
+            0xE0 => {
+                let n = self.fetch();
+                let v = self.regs.a;
+                self.write8(0xFF00 + n as u16, v);
+            }
+            0xF0 => {
+                let n = self.fetch();
+                self.regs.a = self.read8(0xFF00 + n as u16);
+            }
+            0xE2 => {
+                let a = 0xFF00 + self.regs.c as u16;
+                let v = self.regs.a;
+                self.write8(a, v);
+            }
+            0xF2 => {
+                let a = 0xFF00 + self.regs.c as u16;
+                self.regs.a = self.read8(a);
+            }
+            // LD (nn),A / LD A,(nn)
+            0xEA => {
+                let nn = self.fetch16();
+                let v = self.regs.a;
+                self.write8(nn, v);
+            }
+            0xFA => {
+                let nn = self.fetch16();
+                self.regs.a = self.read8(nn);
+            }
             _ => unimplemented!("opcode {op:#04X} at {:#06X}", self.regs.pc.wrapping_sub(1)),
         }
     }

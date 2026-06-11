@@ -45,3 +45,32 @@ fn ld_hl_indirect_reads_and_writes_memory() {
     assert_eq!(cpu.regs.a, 0xAB);
     assert_eq!(cpu.bus.cycles, 12 + 8);
 }
+
+#[test]
+fn ld_a_hli_reads_and_increments() {
+    let mut cpu = cpu_with(&[0x2A]); // LD A,(HL+)
+    cpu.regs.set_hl(0xC000);
+    cpu.bus.write(0xC000, 0x77);
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x77);
+    assert_eq!(cpu.regs.hl(), 0xC001);
+    assert_eq!(cpu.bus.cycles, 8);
+}
+
+#[test]
+fn ldh_n_a_writes_high_page() {
+    let mut cpu = cpu_with(&[0xE0, 0x80]); // LDH (0x80),A -> 0xFF80 (HRAM)
+    cpu.regs.a = 0x5A;
+    cpu.step();
+    assert_eq!(cpu.bus.read(0xFF80), 0x5A);
+    assert_eq!(cpu.bus.cycles, 12);
+}
+
+#[test]
+fn ld_a_nn_absolute() {
+    let mut cpu = cpu_with(&[0xFA, 0x00, 0xC0]); // LD A,(0xC000)
+    cpu.bus.write(0xC000, 0x99);
+    cpu.step();
+    assert_eq!(cpu.regs.a, 0x99);
+    assert_eq!(cpu.bus.cycles, 16);
+}
