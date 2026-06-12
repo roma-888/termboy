@@ -5,6 +5,7 @@ use std::fmt;
 
 use crate::mbc1::Mbc1;
 use crate::mbc3::Mbc3;
+use crate::mbc5::Mbc5;
 
 #[derive(Debug)]
 pub enum CartError {
@@ -97,6 +98,7 @@ impl Mbc for RomOnly {
 
 pub struct Cartridge {
     mbc: Box<dyn Mbc>,
+    cgb: bool,
 }
 
 impl fmt::Debug for Cartridge {
@@ -110,6 +112,7 @@ impl Cartridge {
         if rom.len() < 0x150 {
             return Err(CartError::TooSmall);
         }
+        let cgb = rom[0x143] & 0x80 != 0;
         let mbc: Box<dyn Mbc> = match rom[0x147] {
             code @ (0x00 | 0x08 | 0x09) => {
                 if rom.len() > 0x8000 {
@@ -129,6 +132,11 @@ impl Cartridge {
                 let ram = ram_size(rom[0x149]);
                 Box::new(Mbc3::new(rom, ram, battery, has_rtc))
             }
+            0x19..=0x1E => {
+                let battery = matches!(rom[0x147], 0x1B | 0x1E);
+                let ram = ram_size(rom[0x149]);
+                Box::new(Mbc5::new(rom, ram, battery))
+            }
             code => {
                 let name = match code {
                     0x01..=0x03 => "MBC1",
@@ -140,9 +148,11 @@ impl Cartridge {
                 return Err(CartError::Unsupported { code, name });
             }
         };
-        Ok(Self { mbc })
+        Ok(Self { mbc, cgb })
     }
 
+    /// Header requests Game Boy Color mode (0x143 bit 7).
+    pub fn cgb(&self) -> bool { self.cgb }
     pub fn read_rom(&self, addr: u16) -> u8 { self.mbc.read_rom(addr) }
     pub fn write_rom(&mut self, addr: u16, value: u8) { self.mbc.write_rom(addr, value) }
     pub fn read_ram(&self, addr: u16) -> u8 { self.mbc.read_ram(addr) }
@@ -176,8 +186,8 @@ mod tests {
 
     #[test]
     fn unsupported_mapper_is_a_named_error() {
-        let err = Cartridge::new(rom_with_mapper(0x19)).unwrap_err();
-        assert!(err.to_string().contains("MBC5"));
+        let err = Cartridge::new(rom_with_mapper(0x05)).unwrap_err();
+        assert!(err.to_string().contains("MBC2"));
     }
 
     #[test]
@@ -210,6 +220,16 @@ mod tests {
         rom[0x147] = 0x08;
         let err = Cartridge::new(rom).unwrap_err();
         assert!(err.to_string().contains("bad dump"));
+    }
+
+    #[test]
+    fn cgb_flag_from_header() {
+        let mut rom = rom_with_mapper(0x00);
+        assert!(!Cartridge::new(rom.clone()).unwrap().cgb());
+        rom[0x143] = 0x80;
+        assert!(Cartridge::new(rom.clone()).unwrap().cgb());
+        rom[0x143] = 0xC0;
+        assert!(Cartridge::new(rom).unwrap().cgb());
     }
 
     #[test]

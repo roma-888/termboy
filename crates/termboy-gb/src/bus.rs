@@ -17,7 +17,12 @@ pub const IF_JOYPAD: u8 = 0x10;
 pub struct Bus {
     pub cart: Cartridge,
     pub ppu: Ppu,
-    wram: [u8; 0x2000],
+    pub cgb: bool,
+    wram: Box<[u8; 0x8000]>, // 8 banks; DMG uses the first two
+    svbk: u8,
+    vbk: u8,
+    key1_armed: bool,
+    pub double_speed: bool,
     hram: [u8; 0x7F],
     pub timer: Timer,
     pub serial: Serial,
@@ -37,7 +42,12 @@ impl Bus {
         Self {
             cart,
             ppu: Ppu::new(),
-            wram: [0; 0x2000],
+            cgb: false,
+            wram: Box::new([0; 0x8000]),
+            svbk: 0,
+            vbk: 0,
+            key1_armed: false,
+            double_speed: false,
             hram: [0; 0x7F],
             timer: Timer::default(),
             serial: Serial::default(),
@@ -51,16 +61,39 @@ impl Bus {
         }
     }
 
-    /// Advance one M-cycle: timer and PPU per T-cycle, OAM-DMA per M-cycle.
+    fn wram_index(&self, addr: u16) -> usize {
+        match addr & 0x1FFF {
+            // 0xC000-0xCFFF (and its echo): always bank 0
+            off @ 0x0000..=0x0FFF => off as usize,
+            off => {
+                let bank = if self.cgb { (self.svbk & 7).max(1) } else { 1 } as usize;
+                bank * 0x1000 + (off as usize - 0x1000)
+            }
+        }
+    }
+
+    /// CGB speed switch: STOP with KEY1 armed toggles double speed.
+    pub fn try_speed_switch(&mut self) {
+        if self.cgb && self.key1_armed {
+            self.double_speed = !self.double_speed;
+            self.key1_armed = false;
+        }
+    }
+
+    /// Advance one M-cycle of CPU time. The timer runs on the CPU clock; the
+    /// PPU runs in real time, so it gets half the T-cycles in double speed.
     pub fn tick(&mut self) {
         self.cycles += 4;
         for _ in 0..4 {
             if self.timer.tick() {
                 self.intf |= IF_TIMER;
             }
+        }
+        let ppu_t = if self.double_speed { 2 } else { 4 };
+        for _ in 0..ppu_t {
             self.intf |= self.ppu.tick();
         }
-        self.cart.tick(4);
+        self.cart.tick(ppu_t);
         // OAM DMA: one byte per M-cycle, 160 M-cycles total.
         if self.dma_idx < 0xA0 {
             let value = self.read(self.dma_src + self.dma_idx as u16);
@@ -72,10 +105,9 @@ impl Bus {
     pub fn read(&mut self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => self.cart.read_rom(addr),
-            0x8000..=0x9FFF => self.ppu.vram[(addr - 0x8000) as usize],
+            0x8000..=0x9FFF => self.ppu.vram[(self.vbk as usize & 1) * 0x2000 + (addr - 0x8000) as usize],
             0xA000..=0xBFFF => self.cart.read_ram(addr),
-            0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize],
-            0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize],
+            0xC000..=0xDFFF | 0xE000..=0xFDFF => self.wram[self.wram_index(addr)],
             0xFE00..=0xFE9F => self.ppu.oam[(addr - 0xFE00) as usize],
             0xFEA0..=0xFEFF => 0xFF,
             0xFF00..=0xFF7F => self.read_io(addr),
@@ -87,10 +119,11 @@ impl Bus {
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x7FFF => self.cart.write_rom(addr, value),
-            0x8000..=0x9FFF => self.ppu.vram[(addr - 0x8000) as usize] = value,
+            0x8000..=0x9FFF => {
+                self.ppu.vram[(self.vbk as usize & 1) * 0x2000 + (addr - 0x8000) as usize] = value
+            }
             0xA000..=0xBFFF => self.cart.write_ram(addr, value),
-            0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize] = value,
-            0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize] = value,
+            0xC000..=0xDFFF | 0xE000..=0xFDFF => self.wram[self.wram_index(addr)] = value,
             0xFE00..=0xFE9F => self.ppu.oam[(addr - 0xFE00) as usize] = value,
             0xFEA0..=0xFEFF => {}
             0xFF00..=0xFF7F => self.write_io(addr, value),
@@ -121,6 +154,11 @@ impl Bus {
             0xFF49 => self.ppu.obp1,
             0xFF4A => self.ppu.wy,
             0xFF4B => self.ppu.wx,
+            0xFF4D if self.cgb => {
+                ((self.double_speed as u8) << 7) | self.key1_armed as u8 | 0x7E
+            }
+            0xFF4F if self.cgb => self.vbk | 0xFE,
+            0xFF70 if self.cgb => self.svbk | 0xF8,
             _ => 0xFF,
         }
     }
@@ -151,6 +189,9 @@ impl Bus {
             0xFF49 => self.ppu.obp1 = value,
             0xFF4A => self.ppu.wy = value,
             0xFF4B => self.ppu.wx = value,
+            0xFF4D if self.cgb => self.key1_armed = value & 1 != 0,
+            0xFF4F if self.cgb => self.vbk = value & 1,
+            0xFF70 if self.cgb => self.svbk = value & 7,
             _ => {}
         }
     }
@@ -220,6 +261,73 @@ use crate::joypad::Joypad;
         b.tick();
         assert_eq!(b.read(0xFE00), 0x00);
         assert_eq!(b.read(0xFE9F), 0x9F); // all 160 bytes landed
+    }
+
+    fn cgb_bus() -> Bus {
+        let mut b = bus();
+        b.cgb = true;
+        b.ppu.cgb = true;
+        b
+    }
+
+    #[test]
+    fn svbk_banks_wram_d000_region() {
+        let mut b = cgb_bus();
+        b.write(0xFF70, 2);
+        b.write(0xD000, 0x22);
+        b.write(0xFF70, 3);
+        b.write(0xD000, 0x33);
+        b.write(0xC000, 0xCC); // bank 0 region unaffected by SVBK
+        b.write(0xFF70, 2);
+        assert_eq!(b.read(0xD000), 0x22);
+        assert_eq!(b.read(0xC000), 0xCC);
+        b.write(0xFF70, 0); // 0 selects bank 1
+        b.write(0xD000, 0x11);
+        b.write(0xFF70, 1);
+        assert_eq!(b.read(0xD000), 0x11);
+        assert_eq!(b.read(0xFF70), 0xF8 | 1);
+    }
+
+    #[test]
+    fn vbk_banks_vram() {
+        let mut b = cgb_bus();
+        b.write(0xFF4F, 0);
+        b.write(0x8000, 0xAA);
+        b.write(0xFF4F, 1);
+        assert_eq!(b.read(0x8000), 0x00); // bank 1 is separate
+        b.write(0x8000, 0xBB);
+        b.write(0xFF4F, 0);
+        assert_eq!(b.read(0x8000), 0xAA);
+        assert_eq!(b.read(0xFF4F), 0xFE | 0);
+    }
+
+    #[test]
+    fn dmg_mode_ignores_banking_registers() {
+        let mut b = bus(); // cgb = false
+        b.write(0xFF70, 5);
+        b.write(0xFF4F, 1);
+        assert_eq!(b.read(0xFF70), 0xFF);
+        assert_eq!(b.read(0xFF4F), 0xFF);
+        b.write(0x8000, 0xAA);
+        assert_eq!(b.read(0x8000), 0xAA); // always bank 0
+    }
+
+    #[test]
+    fn speed_switch_toggles_and_halves_ppu_rate() {
+        let mut b = cgb_bus();
+        b.write(0xFF4D, 1); // arm
+        b.try_speed_switch();
+        assert!(b.double_speed);
+        assert_eq!(b.read(0xFF4D) & 0x81, 0x80); // doubled, no longer armed
+        // one scanline now takes 228 M-cycles instead of 114
+        for _ in 0..114 {
+            b.tick();
+        }
+        assert_eq!(b.read(0xFF44), 0);
+        for _ in 0..114 {
+            b.tick();
+        }
+        assert_eq!(b.read(0xFF44), 1);
     }
 
     #[test]

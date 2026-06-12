@@ -17,8 +17,10 @@ pub const LCDC_WIN_MAP: u8 = 0x40;
 pub const LCDC_LCD_ON: u8 = 0x80;
 
 pub struct Ppu {
-    pub vram: [u8; 0x2000],
+    /// Two 8 KB banks; DMG uses only bank 0. Bank 1 holds CGB BG attributes.
+    pub vram: Box<[u8; 0x4000]>,
     pub oam: [u8; 0xA0],
+    pub cgb: bool,
     pub lcdc: u8,
     stat: u8, // enable bits 3-6 only; mode/LYC computed on read
     pub scy: u8,
@@ -42,8 +44,9 @@ pub struct Ppu {
 impl Ppu {
     pub fn new() -> Self {
         Self {
-            vram: [0; 0x2000],
+            vram: Box::new([0; 0x4000]),
             oam: [0; 0xA0],
+            cgb: false,
             // DMG post-boot I/O state (the other GBC seam, spec §3)
             lcdc: 0x91,
             stat: 0,

@@ -3,6 +3,7 @@ pub mod cartridge;
 pub mod joypad;
 mod mbc1;
 mod mbc3;
+mod mbc5;
 pub mod cpu;
 pub mod ppu;
 pub mod serial;
@@ -40,8 +41,19 @@ pub struct GameBoy {
 impl GameBoy {
     pub fn new(rom: Vec<u8>) -> Result<Self, CartError> {
         let cart = Cartridge::new(rom)?;
+        let cgb = cart.cgb();
+        let mut cpu = Cpu::new(Bus::new(cart));
+        if cgb {
+            // CGB post-boot register state — A=0x11 is how games detect color.
+            cpu.regs.set_af(0x1180);
+            cpu.regs.set_bc(0x0000);
+            cpu.regs.set_de(0xFF56);
+            cpu.regs.set_hl(0x000D);
+            cpu.bus.cgb = true;
+            cpu.bus.ppu.cgb = true;
+        }
         Ok(Self {
-            cpu: Cpu::new(Bus::new(cart)),
+            cpu,
             frame: FrameBuffer::new(160, 144),
             palette: DMG_GREEN,
         })
@@ -110,6 +122,15 @@ mod tests {
         let c1 = gb.cycles();
         gb.run_frame(Buttons::default());
         assert_eq!(gb.cycles() - c1, CYCLES_PER_FRAME);
+    }
+
+    #[test]
+    fn cgb_header_boots_with_a_11() {
+        let mut rom = spin_rom();
+        rom[0x143] = 0x80;
+        let gb = GameBoy::new(rom).unwrap();
+        assert_eq!(gb.cpu.regs.a, 0x11);
+        assert!(gb.cpu.bus.cgb);
     }
 
     #[test]

@@ -502,8 +502,10 @@ impl Cpu {
                 }
             }
             0x10 => {
-                // STOP consumes its padding byte; no-op until GBC speed switch
+                // STOP consumes its padding byte; on CGB it performs the
+                // KEY1-armed speed switch instead of stopping.
                 self.fetch();
+                self.bus.try_speed_switch();
             }
             // invalid opcodes — real hardware locks up; fail loudly during development
             0xD3 | 0xDB | 0xDD | 0xE3 | 0xE4 | 0xEB | 0xEC | 0xED | 0xF4 | 0xFC | 0xFD => {
