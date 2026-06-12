@@ -17,7 +17,7 @@ pub struct Input {
     enhanced: bool,
     keymap: HashMap<KeyCode, Buttons>,
     held: Buttons,                // enhanced mode state
-    timers: [Option<Instant>; 8], // fallback: last event per button bit
+    timers: [Option<Instant>; 16], // fallback: last event per button bit
 }
 
 pub fn default_keymap() -> HashMap<KeyCode, Buttons> {
@@ -78,7 +78,7 @@ pub fn parse_keys(spec: &str) -> Option<HashMap<KeyCode, Buttons>> {
 
 impl Input {
     pub fn new(enhanced: bool, keymap: HashMap<KeyCode, Buttons>) -> Self {
-        Self { enhanced, keymap, held: Buttons::default(), timers: [None; 8] }
+        Self { enhanced, keymap, held: Buttons::default(), timers: [None; 16] }
     }
 
     fn map(&self, code: KeyCode) -> Option<Buttons> {

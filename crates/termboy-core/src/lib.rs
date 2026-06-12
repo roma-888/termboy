@@ -17,19 +17,22 @@ impl FrameBuffer {
     }
 }
 
-/// Button state as a bitset. Extensible (GBA shoulder buttons get free bits).
+/// Button state as a bitset. Bits 0-7 match the GB layout; bits 8-9 are the
+/// GBA shoulder buttons (cores map these to their own hardware order).
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Buttons(pub u8);
+pub struct Buttons(pub u16);
 
 impl Buttons {
-    pub const RIGHT: Buttons = Buttons(0x01);
-    pub const LEFT: Buttons = Buttons(0x02);
-    pub const UP: Buttons = Buttons(0x04);
-    pub const DOWN: Buttons = Buttons(0x08);
-    pub const A: Buttons = Buttons(0x10);
-    pub const B: Buttons = Buttons(0x20);
-    pub const SELECT: Buttons = Buttons(0x40);
-    pub const START: Buttons = Buttons(0x80);
+    pub const RIGHT: Buttons = Buttons(0x0001);
+    pub const LEFT: Buttons = Buttons(0x0002);
+    pub const UP: Buttons = Buttons(0x0004);
+    pub const DOWN: Buttons = Buttons(0x0008);
+    pub const A: Buttons = Buttons(0x0010);
+    pub const B: Buttons = Buttons(0x0020);
+    pub const SELECT: Buttons = Buttons(0x0040);
+    pub const START: Buttons = Buttons(0x0080);
+    pub const L: Buttons = Buttons(0x0100);
+    pub const R: Buttons = Buttons(0x0200);
 
     pub fn contains(self, other: Buttons) -> bool { self.0 & other.0 == other.0 }
     pub fn with(self, other: Buttons) -> Buttons { Buttons(self.0 | other.0) }
@@ -59,6 +62,14 @@ mod tests {
         assert!(b.contains(Buttons::A));
         assert!(b.contains(Buttons::START));
         assert!(!b.contains(Buttons::LEFT));
+    }
+
+    #[test]
+    fn buttons_widen_to_u16_with_shoulder_buttons() {
+        let b = Buttons::default().with(Buttons::L).with(Buttons::R);
+        assert!(b.contains(Buttons::L) && b.contains(Buttons::R));
+        assert!(!b.contains(Buttons::A));
+        assert_eq!(b.0, 0x0300);
     }
 
     #[test]

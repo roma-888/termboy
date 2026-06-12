@@ -17,10 +17,10 @@ impl Joypad {
     pub fn read(&self) -> u8 {
         let mut low = 0x0F;
         if self.select & 0x10 == 0 {
-            low &= !(self.buttons.0 & 0x0F) & 0x0F; // directions
+            low &= !(self.buttons.0 as u8 & 0x0F) & 0x0F; // directions
         }
         if self.select & 0x20 == 0 {
-            low &= !((self.buttons.0 >> 4) & 0x0F) & 0x0F; // actions
+            low &= !((self.buttons.0 >> 4) as u8 & 0x0F) & 0x0F; // actions
         }
         0xC0 | self.select | low
     }
