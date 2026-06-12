@@ -46,7 +46,7 @@ impl Core for GbaCore {
         let cap = self.cpu.bus.cycles + CYCLES_PER_FRAME;
         while !self.cpu.bus.ppu.frame_ready && self.cpu.bus.cycles < cap {
             self.cpu.step();
-            self.cpu.bus.ppu_catch_up();
+            self.cpu.bus.catch_up();
         }
         for (i, &c) in self.cpu.bus.ppu.frame.iter().enumerate() {
             self.frame.pixels[i] = ppu::bgr555_to_rgb(c);

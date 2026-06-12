@@ -32,8 +32,6 @@ pub struct Ppu {
     pub frame: Box<[u16; WIDTH * HEIGHT]>,
     /// Set when scanline 159 completes; consumed by GbaCore::run_frame.
     pub frame_ready: bool,
-    /// Absolute count of fully-elapsed scanlines since power-on.
-    lines_done: u64,
     // -- per-scanline scratch --
     pub(crate) bg_line: [[u16; WIDTH]; 4],
     pub(crate) obj_line: [ObjPx; WIDTH],
@@ -49,7 +47,6 @@ impl Ppu {
         Self {
             frame: Box::new([0; WIDTH * HEIGHT]),
             frame_ready: false,
-            lines_done: 0,
             bg_line: [[TRANSPARENT; WIDTH]; 4],
             obj_line: [NO_OBJ; WIDTH],
             obj_window: [false; WIDTH],
@@ -72,24 +69,8 @@ pub fn bgr555_to_rgb(c: u16) -> Rgb {
 }
 
 impl Bus {
-    /// Render every scanline the cycle counter has completed since the last
-    /// call. GbaCore calls this after each CPU step, so at most a line or two
-    /// pass per call.
-    pub fn ppu_catch_up(&mut self) {
-        let completed = self.cycles / CYCLES_PER_LINE;
-        while self.ppu.lines_done < completed {
-            let line = (self.ppu.lines_done % LINES) as usize;
-            self.ppu.lines_done += 1;
-            if line < HEIGHT {
-                self.render_scanline(line);
-                if line == HEIGHT - 1 {
-                    self.ppu.frame_ready = true;
-                }
-            }
-        }
-    }
-
-    fn render_scanline(&mut self, line: usize) {
+    /// Render one completed scanline — driven by Bus::catch_up's hblank event.
+    pub(crate) fn render_scanline(&mut self, line: usize) {
         let dispcnt = self.io16(0x000);
         if dispcnt & 0x80 != 0 {
             // forced blank: the LCD shows white

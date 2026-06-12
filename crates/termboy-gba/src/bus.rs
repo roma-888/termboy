@@ -4,6 +4,8 @@
 pub(crate) const CYCLES_PER_LINE: u64 = 1232;
 pub(crate) const LINES: u64 = 228;
 const VBLANK_START: u64 = 160;
+/// Cycle within a line at which hblank begins.
+pub(crate) const HBLANK_AT: u64 = 1006;
 
 pub struct Bus {
     pub rom: Vec<u8>,
@@ -19,6 +21,10 @@ pub struct Bus {
     pub ppu: crate::ppu::Ppu,
     /// Total elapsed (coarse) cycles since power-on.
     pub cycles: u64,
+    /// Number of timing events processed (2 per line: start, hblank).
+    events_done: u64,
+    /// Set by HALTCNT / the Halt SWI; cleared when IE & IF intersect.
+    pub halted: bool,
 }
 
 impl Bus {
@@ -35,6 +41,42 @@ impl Bus {
             keyinput: 0x03FF,
             ppu: crate::ppu::Ppu::new(),
             cycles: 0,
+            events_done: 0,
+            halted: false,
+        }
+    }
+
+    /// Process every timing event the cycle counter has passed: scanline
+    /// rendering, vblank/hblank/vcount IRQs, and (later tasks) DMA triggers
+    /// and timer ticks. Two events per line: line start and hblank.
+    pub fn catch_up(&mut self) {
+        loop {
+            let k = self.events_done;
+            let at = (k / 2) * CYCLES_PER_LINE + (k % 2) * HBLANK_AT;
+            if at > self.cycles {
+                break;
+            }
+            self.events_done += 1;
+            let line = (k / 2) % LINES;
+            let dispstat = self.io16(0x004);
+            if k % 2 == 0 {
+                if line == self.io[0x005] as u64 && dispstat & (1 << 5) != 0 {
+                    self.raise_irq(1 << 2); // VCOUNT match
+                }
+                if line == VBLANK_START && dispstat & (1 << 3) != 0 {
+                    self.raise_irq(1 << 0);
+                }
+            } else {
+                if dispstat & (1 << 4) != 0 {
+                    self.raise_irq(1 << 1); // hblank fires on every line
+                }
+                if line < VBLANK_START {
+                    self.render_scanline(line as usize);
+                    if line == VBLANK_START - 1 {
+                        self.ppu.frame_ready = true;
+                    }
+                }
+            }
         }
     }
 
@@ -189,7 +231,7 @@ impl Bus {
                 if (VBLANK_START..LINES - 1).contains(&line) {
                     v |= 1;
                 }
-                if self.cycles % CYCLES_PER_LINE >= 1006 {
+                if self.cycles % CYCLES_PER_LINE >= HBLANK_AT {
                     v |= 2;
                 }
                 if line == self.io[0x005] as u64 {
@@ -329,6 +371,58 @@ mod tests {
         assert_eq!(b.read16(0x0400_0130), 0x01FE);
         b.set_buttons(Buttons::default());
         assert_eq!(b.read16(0x0400_0130), 0x03FF);
+    }
+
+    #[test]
+    fn vblank_irq_raised_once_at_line_160() {
+        let mut b = bus();
+        b.write16(0x0400_0004, 1 << 3); // DISPSTAT: vblank IRQ enable
+        b.cycles = 159 * 1232;
+        b.catch_up();
+        assert_eq!(b.read16(0x0400_0202), 0); // not yet
+        b.cycles = 160 * 1232;
+        b.catch_up();
+        assert_eq!(b.read16(0x0400_0202) & 1, 1);
+        b.write16(0x0400_0202, 1); // acknowledge
+        b.cycles = 170 * 1232;
+        b.catch_up(); // still the same vblank: no re-raise
+        assert_eq!(b.read16(0x0400_0202) & 1, 0);
+    }
+
+    #[test]
+    fn vblank_irq_not_raised_when_disabled() {
+        let mut b = bus();
+        b.cycles = 161 * 1232;
+        b.catch_up();
+        assert_eq!(b.read16(0x0400_0202), 0);
+    }
+
+    #[test]
+    fn hblank_irq_fires_every_line_including_vblank_lines() {
+        let mut b = bus();
+        b.write16(0x0400_0004, 1 << 4); // hblank IRQ enable
+        b.cycles = 1005;
+        b.catch_up();
+        assert_eq!(b.read16(0x0400_0202), 0);
+        b.cycles = 1006;
+        b.catch_up();
+        assert_eq!(b.read16(0x0400_0202) & 2, 2);
+        b.write16(0x0400_0202, 2);
+        b.cycles = 200 * 1232 + 1006; // deep in vblank
+        b.catch_up();
+        assert_eq!(b.read16(0x0400_0202) & 2, 2);
+    }
+
+    #[test]
+    fn vcount_irq_on_matching_line_only() {
+        let mut b = bus();
+        b.write16(0x0400_0004, (42 << 8) | (1 << 5)); // VCOUNT=42 + IRQ enable
+        b.cycles = 42 * 1232 - 1;
+        b.catch_up();
+        assert_eq!(b.read16(0x0400_0202), 0);
+        b.cycles = 42 * 1232;
+        b.catch_up();
+        assert_eq!(b.read16(0x0400_0202) & 4, 4);
     }
 
     #[test]

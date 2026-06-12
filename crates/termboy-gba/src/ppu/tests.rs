@@ -13,7 +13,7 @@ fn set_dispcnt(b: &mut Bus, v: u16) {
 /// Advance the clock so scanline `line` has just completed, and render.
 fn render_line(b: &mut Bus, line: u64) {
     b.cycles = (line + 1) * CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
 }
 
 /// One 8x8 4bpp tile at char_base, all pixels = `idx`, into tile slot `tile`.
@@ -32,12 +32,12 @@ fn set_entry(b: &mut Bus, screen_base: u32, sbb: u32, tx: u32, ty: u32, entry: u
 #[test]
 fn catch_up_renders_only_completed_lines() {
     let mut b = bus();
-    b.cycles = CYCLES_PER_LINE - 1; // line 0 not finished yet
-    b.ppu_catch_up();
+    b.cycles = crate::bus::HBLANK_AT - 1; // line 0 still drawing
+    b.catch_up();
     assert!(!b.ppu.frame_ready);
-    b.write16(0x0500_0000, 0x7C00); // backdrop = blue, set BEFORE line completes
-    b.cycles = CYCLES_PER_LINE; // line 0 done
-    b.ppu_catch_up();
+    b.write16(0x0500_0000, 0x7C00); // backdrop = blue, set BEFORE hblank
+    b.cycles = crate::bus::HBLANK_AT; // line 0 completes at its hblank
+    b.catch_up();
     assert_eq!(b.ppu.frame[0], 0x7C00); // line 0 rendered with current state
     assert_eq!(b.ppu.frame[WIDTH], 0x0000); // line 1 untouched so far
 }
@@ -46,19 +46,19 @@ fn catch_up_renders_only_completed_lines() {
 fn frame_ready_after_line_159_and_only_then() {
     let mut b = bus();
     b.cycles = 159 * CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert!(!b.ppu.frame_ready);
     b.cycles = 160 * CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert!(b.ppu.frame_ready);
     // vblank lines render nothing and don't re-trigger
     b.ppu.frame_ready = false;
     b.cycles = 228 * CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert!(!b.ppu.frame_ready);
     // ...until the next frame's line 159 completes
     b.cycles = (228 + 160) * CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert!(b.ppu.frame_ready);
 }
 
@@ -67,7 +67,7 @@ fn forced_blank_renders_white() {
     let mut b = bus();
     set_dispcnt(&mut b, 0x0080);
     b.cycles = CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert!(b.ppu.frame[..WIDTH].iter().all(|&p| p == 0x7FFF));
 }
 
@@ -77,7 +77,7 @@ fn unimplemented_modes_render_backdrop() {
     set_dispcnt(&mut b, 0x0100); // mode 0, BG0 on — tiled, lands in G3
     b.write16(0x0500_0000, 0x03E0); // green backdrop
     b.cycles = CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert!(b.ppu.frame[..WIDTH].iter().all(|&p| p == 0x03E0));
 }
 
@@ -97,7 +97,7 @@ fn mode3_renders_direct_color_pixels() {
     b.write16(0x0600_0000, 0x001F); // pixel (0,0) red
     b.write16(0x0600_0000 + 2 * (WIDTH as u32), 0x7C00); // pixel (0,1) blue
     b.cycles = 2 * CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert_eq!(b.ppu.frame[0], 0x001F);
     assert_eq!(b.ppu.frame[WIDTH], 0x7C00);
     assert_eq!(b.ppu.frame[1], 0x0000); // untouched VRAM is black
@@ -110,7 +110,7 @@ fn mode3_without_bg2_shows_backdrop() {
     b.write16(0x0500_0000, 0x7C00); // blue backdrop
     b.write16(0x0600_0000, 0x001F);
     b.cycles = CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert_eq!(b.ppu.frame[0], 0x7C00);
 }
 
@@ -123,12 +123,12 @@ fn mode4_renders_palette_indices_with_page_flip() {
     b.write16(0x0600_0000, 0x0201); // pixels (0,0)=idx1, (1,0)=idx2
     b.write16(0x0600_A000, 0x0102); // page 1 has them swapped
     b.cycles = CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert_eq!(b.ppu.frame[0], 0x001F);
     assert_eq!(b.ppu.frame[1], 0x03E0);
     set_dispcnt(&mut b, 0x0414); // flip to page 1
     b.cycles = 228 * CYCLES_PER_LINE + CYCLES_PER_LINE; // next frame, line 0 done
-    b.ppu_catch_up();
+    b.catch_up();
     assert_eq!(b.ppu.frame[0], 0x03E0);
     assert_eq!(b.ppu.frame[1], 0x001F);
 }
@@ -548,11 +548,11 @@ fn mode5_small_bitmap_with_backdrop_border() {
     b.write16(0x0500_0000, 0x7C00); // blue backdrop
     b.write16(0x0600_0000, 0x001F); // pixel (0,0) of the 160x128 window
     b.cycles = CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert_eq!(b.ppu.frame[0], 0x001F);
     assert_eq!(b.ppu.frame[160], 0x7C00); // x >= 160: backdrop
     // line 128+ is all backdrop
     b.cycles = 129 * CYCLES_PER_LINE;
-    b.ppu_catch_up();
+    b.catch_up();
     assert!(b.ppu.frame[128 * WIDTH..129 * WIDTH].iter().all(|&p| p == 0x7C00));
 }
