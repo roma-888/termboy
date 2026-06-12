@@ -270,9 +270,12 @@ fn run_menu(
                     let mut input = input::Input::new(guard.enhanced, keymap.clone());
                     let mut screen = screen::Screen::new(240, 160);
                     print!("\x1b[0m\x1b[2J");
-                    run_game(core, exact, &sav_path(&path), &mut input, &mut screen, &audio);
-                    // Esc in-game returns here: back to the picker.
-                    None
+                    let sav = sav_path(&path);
+                    let audio = &audio; // keep the move closure from consuming it
+                    catch_game_panic(move || {
+                        run_game(core, exact, &sav, &mut input, &mut screen, audio);
+                        // Esc in-game returns here: back to the picker.
+                    })
                 }
                 Err(msg) => Some(msg),
             }
@@ -282,18 +285,39 @@ fn run_menu(
                     let mut input = input::Input::new(guard.enhanced, keymap.clone());
                     let mut screen = screen::Screen::new(160, 144);
                     print!("\x1b[0m\x1b[2J");
-                    run_game(gb, exact, &sav, &mut input, &mut screen, &audio);
-                    None
+                    let audio = &audio;
+                    catch_game_panic(move || {
+                        run_game(gb, exact, &sav, &mut input, &mut screen, audio);
+                    })
                 }
                 Err(msg) => Some(msg),
             }
         };
         if let Some(msg) = launch_err {
-            // show the error in the picker session briefly
-            print!("\x1b[0m\x1b[2J\x1b[Herror: {msg}\r\n\r\npress any key");
+            // the panic hook may have left raw mode + the alternate screen;
+            // restore both before showing the error in the picker session
+            let _ = terminal::enable_raw_mode();
+            print!("\x1b[?1049h\x1b[0m\x1b[2J\x1b[Herror: {msg}\r\n\r\npress any key");
             use std::io::Write as _;
             std::io::stdout().flush().ok();
             let _ = event::read();
+        }
+    }
+}
+
+/// Run a game, converting a core panic into a picker-visible message
+/// instead of killing the whole app (GBA cores hit loud unimplemented!
+/// seams until G4 fills them in).
+fn catch_game_panic(f: impl FnOnce()) -> Option<String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(()) => None,
+        Err(e) => {
+            let detail = e
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| e.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            Some(format!("this game needs a later milestone: {detail}"))
         }
     }
 }
