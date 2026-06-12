@@ -387,6 +387,121 @@ fn affine_obj_half_scale_shrinks_with_double_size_canvas() {
 }
 
 #[test]
+fn win0_gates_bg_inside_and_winout_outside() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x2100); // mode 0, BG0, WIN0
+    b.write16(0x0400_0008, 0x0100); // BG0: screen base 1
+    b.write16(0x0500_0002, 0x03E0);
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    for tx in 0..30 {
+        set_entry(&mut b, 0x800, 0, tx, 0, 0x0001); // solid green line of tiles
+    }
+    b.write16(0x0400_0040, (8 << 8) | 16); // WIN0H: x 8..16
+    b.write16(0x0400_0044, 160); // WIN0V: y 0..160
+    b.write16(0x0400_0048, 0x0001); // WININ: BG0 inside
+    b.write16(0x0400_004A, 0x0000); // WINOUT: nothing outside
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[8], 0x03E0); // inside window: BG0 shows
+    assert_eq!(b.ppu.frame[7], 0x0000); // outside: backdrop only
+    assert_eq!(b.ppu.frame[16], 0x0000); // right edge is exclusive
+}
+
+#[test]
+fn win0_wraps_when_start_exceeds_end() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x2100);
+    b.write16(0x0400_0008, 0x0100);
+    b.write16(0x0500_0002, 0x03E0);
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    for tx in 0..30 {
+        set_entry(&mut b, 0x800, 0, tx, 0, 0x0001);
+    }
+    b.write16(0x0400_0040, (200 << 8) | 16); // x >= 200 or x < 16
+    b.write16(0x0400_0044, 160);
+    b.write16(0x0400_0048, 0x0001);
+    b.write16(0x0400_004A, 0x0000);
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x03E0);
+    assert_eq!(b.ppu.frame[210], 0x03E0);
+    assert_eq!(b.ppu.frame[100], 0x0000);
+}
+
+#[test]
+fn obj_window_uses_winout_high_byte() {
+    let mut b = bus();
+    // 0x9100 = OBJ-window enable (bit 15) + OBJ enable (bit 12) + BG0 (bit 8);
+    // the window sprite needs the OBJ layer scanned to mark the mask.
+    set_dispcnt(&mut b, 0x9100);
+    b.write16(0x0400_0008, 0x0100); // BG0: screen base 1
+    b.write16(0x0500_0002, 0x03E0);
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    for tx in 0..30 {
+        set_entry(&mut b, 0x800, 0, tx, 0, 0x0001);
+    }
+    fill_obj_tile_4bpp(&mut b, 1, 1);
+    set_obj(&mut b, 0, 0x0800, 0x0000, 0x0001); // mode 2 = OBJ-window sprite at (0,0)
+    // WINOUT low byte (outside): BG0 visible; high byte (obj window): nothing
+    b.write16(0x0400_004A, 0x0001);
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x0000); // inside obj window: BG0 hidden
+    assert_eq!(b.ppu.frame[8], 0x03E0); // outside: BG0 shows
+}
+
+#[test]
+fn alpha_blend_mixes_first_and_second_target() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0300); // mode 0, BG0 + BG1
+    b.write16(0x0400_0008, 0x0100); // BG0: prio 0 (top), screen base 1
+    b.write16(0x0400_000A, 0x0201); // BG1: prio 1, screen base 2
+    b.write16(0x0500_0002, 0x001F); // pal 1 = red (BG0 tile)
+    b.write16(0x0500_0004, 0x7C00); // pal 2 = blue (BG1 tile)
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    fill_tile_4bpp(&mut b, 0, 2, 2);
+    set_entry(&mut b, 0x800, 0, 0, 0, 0x0001);
+    set_entry(&mut b, 0x1000, 0, 0, 0, 0x0002); // into BG1's screen block
+    b.write16(0x0400_0050, 0x0241); // BLDCNT: effect 1 (alpha), 1st=BG0, 2nd=BG1
+    b.write16(0x0400_0052, 0x0808); // EVA=EVB=8/16: 50/50
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x3C0F); // red 31->15, blue 31->15
+}
+
+#[test]
+fn brighten_and_darken() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0100);
+    b.write16(0x0400_0008, 0x0100); // BG0: screen base 1
+    b.write16(0x0500_0002, 0x0010); // pal 1 = mid red (16)
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    set_entry(&mut b, 0x800, 0, 0, 0, 0x0001);
+    b.write16(0x0400_0050, 0x0081); // brighten, 1st = BG0
+    b.write16(0x0400_0054, 8); // EVY 8/16
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0] & 31, 16 + (31 - 16) * 8 / 16); // 23
+    b.write16(0x0400_0050, 0x00C1); // darken
+    render_line(&mut b, 1);
+    assert_eq!(b.ppu.frame[WIDTH] & 31, 16 - 16 * 8 / 16); // 8
+}
+
+#[test]
+fn semi_transparent_obj_forces_alpha() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x1100); // BG0 + OBJ
+    b.write16(0x0400_0008, 0x0100); // BG0: screen base 1
+    b.write16(0x0500_0002, 0x7C00); // BG: blue
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    set_entry(&mut b, 0x800, 0, 0, 0, 0x0001);
+    set_entry(&mut b, 0x800, 0, 1, 0, 0x0001); // BG continues past the sprite
+    b.write16(0x0500_0202, 0x001F); // OBJ: red
+    fill_obj_tile_4bpp(&mut b, 1, 1);
+    set_obj(&mut b, 0, 0x0400, 0x0000, 0x0001); // mode 1 = semi-transparent
+    b.write16(0x0400_0050, 0x0100); // effect=none, but 2nd target = BG0
+    b.write16(0x0400_0052, 0x0808);
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x3C0F); // forced 50/50 despite effect=0
+    assert_eq!(b.ppu.frame[8], 0x7C00); // off-sprite: plain BG
+}
+
+#[test]
 fn mode5_small_bitmap_with_backdrop_border() {
     let mut b = bus();
     set_dispcnt(&mut b, 0x0405); // mode 5, BG2, page 0
