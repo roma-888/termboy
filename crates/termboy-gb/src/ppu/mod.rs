@@ -36,9 +36,16 @@ pub struct Ppu {
     window_line: u8, // window's internal line counter
     wy_hit: bool,    // WY==LY matched somewhere this frame
     stat_line: bool, // previous STAT interrupt line (edge detector)
-    /// 160x144 shade indices (0..=3). GameBoy applies the palette.
+    /// 160x144 shade indices (0..=3). GameBoy applies the palette. (DMG mode)
     pub frame: [u8; 160 * 144],
+    /// 160x144 RGB555 pixels. (CGB mode)
+    pub frame_rgb: Vec<u16>,
     pub frame_ready: bool,
+    // CGB palette RAM: 8 palettes x 4 colors x 2 bytes, BG and OBJ
+    pub(crate) bg_pal: [u8; 64],
+    pub(crate) obj_pal: [u8; 64],
+    bcps: u8,
+    ocps: u8,
 }
 
 impl Ppu {
@@ -64,7 +71,12 @@ impl Ppu {
             wy_hit: false,
             stat_line: false,
             frame: [0; 160 * 144],
+            frame_rgb: vec![0; 160 * 144],
             frame_ready: false,
+            bg_pal: [0xFF; 64],
+            obj_pal: [0xFF; 64],
+            bcps: 0,
+            ocps: 0,
         }
     }
 
@@ -129,6 +141,38 @@ impl Ppu {
 
     pub fn write_stat(&mut self, value: u8) {
         self.stat = value & 0x78; // only the enable bits are writable
+    }
+
+    pub fn read_bcps(&self) -> u8 {
+        self.bcps | 0x40
+    }
+    pub fn write_bcps(&mut self, value: u8) {
+        self.bcps = value & 0xBF;
+    }
+    pub fn read_bcpd(&self) -> u8 {
+        self.bg_pal[(self.bcps & 0x3F) as usize]
+    }
+    /// Data writes auto-increment the index when BCPS bit 7 is set.
+    pub fn write_bcpd(&mut self, value: u8) {
+        self.bg_pal[(self.bcps & 0x3F) as usize] = value;
+        if self.bcps & 0x80 != 0 {
+            self.bcps = 0x80 | ((self.bcps + 1) & 0x3F);
+        }
+    }
+    pub fn read_ocps(&self) -> u8 {
+        self.ocps | 0x40
+    }
+    pub fn write_ocps(&mut self, value: u8) {
+        self.ocps = value & 0xBF;
+    }
+    pub fn read_ocpd(&self) -> u8 {
+        self.obj_pal[(self.ocps & 0x3F) as usize]
+    }
+    pub fn write_ocpd(&mut self, value: u8) {
+        self.obj_pal[(self.ocps & 0x3F) as usize] = value;
+        if self.ocps & 0x80 != 0 {
+            self.ocps = 0x80 | ((self.ocps + 1) & 0x3F);
+        }
     }
 
     pub fn write_lcdc(&mut self, value: u8) {

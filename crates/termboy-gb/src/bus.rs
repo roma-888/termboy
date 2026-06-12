@@ -158,6 +158,10 @@ impl Bus {
                 ((self.double_speed as u8) << 7) | self.key1_armed as u8 | 0x7E
             }
             0xFF4F if self.cgb => self.vbk | 0xFE,
+            0xFF68 if self.cgb => self.ppu.read_bcps(),
+            0xFF69 if self.cgb => self.ppu.read_bcpd(),
+            0xFF6A if self.cgb => self.ppu.read_ocps(),
+            0xFF6B if self.cgb => self.ppu.read_ocpd(),
             0xFF70 if self.cgb => self.svbk | 0xF8,
             _ => 0xFF,
         }
@@ -191,6 +195,10 @@ impl Bus {
             0xFF4B => self.ppu.wx = value,
             0xFF4D if self.cgb => self.key1_armed = value & 1 != 0,
             0xFF4F if self.cgb => self.vbk = value & 1,
+            0xFF68 if self.cgb => self.ppu.write_bcps(value),
+            0xFF69 if self.cgb => self.ppu.write_bcpd(value),
+            0xFF6A if self.cgb => self.ppu.write_ocps(value),
+            0xFF6B if self.cgb => self.ppu.write_ocpd(value),
             0xFF70 if self.cgb => self.svbk = value & 7,
             _ => {}
         }

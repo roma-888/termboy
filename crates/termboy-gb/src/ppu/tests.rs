@@ -288,3 +288,121 @@ fn tall_sprites_and_yflip() {
     put_sprite(&mut ppu, 0, 16, 8, 4, 0x40); // y-flipped: bottom tile on top
     assert_eq!(render_one_line(&mut ppu, 0)[0], 2);
 }
+
+#[test]
+fn palette_ports_autoincrement_on_write_only() {
+    let mut ppu = Ppu::new();
+    ppu.write_bcps(0x80); // index 0, auto-increment
+    ppu.write_bcpd(0x12);
+    ppu.write_bcpd(0x34);
+    assert_eq!(ppu.read_bcps() & 0x3F, 2);
+    ppu.write_bcps(0x00); // index 0, no auto-increment
+    assert_eq!(ppu.read_bcpd(), 0x12);
+    assert_eq!(ppu.read_bcpd(), 0x12); // reads never increment
+    assert_eq!(ppu.read_bcps() & 0x3F, 0);
+    ppu.write_ocps(0x81);
+    ppu.write_ocpd(0x77);
+    ppu.write_ocps(0x01);
+    assert_eq!(ppu.read_ocpd(), 0x77);
+}
+
+// ---- CGB rendering ----
+
+fn cgb_ppu() -> Ppu {
+    let mut ppu = Ppu::new();
+    ppu.cgb = true;
+    ppu.lcdc = LCDC_LCD_ON | LCDC_BG_ON | LCDC_OBJ_ON | LCDC_TILE_DATA;
+    // BG palettes: palette p, color c = 0x100*p + c (distinctive RGB555 values)
+    ppu.write_bcps(0x80);
+    for p in 0..8u16 {
+        for c in 0..4u16 {
+            let v = 0x100 * p + c;
+            ppu.write_bcpd(v as u8);
+            ppu.write_bcpd((v >> 8) as u8);
+        }
+    }
+    // OBJ palettes: palette p, color c = 0x1000 + 0x100*p + c
+    ppu.write_ocps(0x80);
+    for p in 0..8u16 {
+        for c in 0..4u16 {
+            let v = 0x1000 + 0x100 * p + c;
+            ppu.write_ocpd(v as u8);
+            ppu.write_ocpd((v >> 8) as u8);
+        }
+    }
+    put_tile(&mut ppu, 1, 2); // bank-0 tile 1: solid color 2
+    ppu
+}
+
+fn cgb_line(ppu: &mut Ppu, ly: u8) -> Vec<u16> {
+    ppu.ly = ly;
+    ppu.render_line();
+    let y = ly as usize;
+    ppu.frame_rgb[y * 160..(y + 1) * 160].to_vec()
+}
+
+#[test]
+fn cgb_bg_uses_attribute_palette() {
+    let mut ppu = cgb_ppu();
+    ppu.vram[0x1800] = 1; // tile 1 (color 2)
+    ppu.vram[0x2000 + 0x1800] = 0x05; // palette 5
+    let line = cgb_line(&mut ppu, 0);
+    assert_eq!(line[0], 0x502); // palette 5, color 2
+    assert_eq!(line[8], 0x000); // tile 0, palette 0, color 0
+}
+
+#[test]
+fn cgb_bg_tile_bank_attribute() {
+    let mut ppu = cgb_ppu();
+    // bank-1 tile 1: solid color 3
+    for row in 0..8 {
+        ppu.vram[0x2000 + 16 + row * 2] = 0xFF;
+        ppu.vram[0x2000 + 16 + row * 2 + 1] = 0xFF;
+    }
+    ppu.vram[0x1800] = 1;
+    ppu.vram[0x2000 + 0x1800] = 0x08; // bank 1, palette 0
+    let line = cgb_line(&mut ppu, 0);
+    assert_eq!(line[0], 0x003); // color 3 from the bank-1 tile
+}
+
+#[test]
+fn cgb_bg_flip_attributes() {
+    let mut ppu = cgb_ppu();
+    // tile 2: left half color 1, right half color 0 (per row: 0xF0 pattern)
+    for row in 0..8 {
+        ppu.vram[2 * 16 + row * 2] = 0xF0;
+        ppu.vram[2 * 16 + row * 2 + 1] = 0x00;
+    }
+    ppu.vram[0x1800] = 2;
+    ppu.vram[0x2000 + 0x1800] = 0x20; // x-flip
+    let line = cgb_line(&mut ppu, 0);
+    assert_eq!(line[0], 0x000); // flipped: left now color 0
+    assert_eq!(line[4], 0x001); // right now color 1
+}
+
+#[test]
+fn cgb_sprites_use_oam_order_not_x() {
+    let mut ppu = cgb_ppu();
+    put_tile(&mut ppu, 2, 1);
+    put_tile(&mut ppu, 3, 2);
+    put_sprite(&mut ppu, 0, 16, 20, 2, 0x01); // OAM 0, x=12, obj palette 1
+    put_sprite(&mut ppu, 1, 16, 16, 3, 0x02); // OAM 1, x=8 (lower x!), palette 2
+    let line = cgb_line(&mut ppu, 0);
+    // overlap pixels 12..16: OAM 0 wins on CGB despite higher X
+    assert_eq!(line[12], 0x1101); // obj palette 1, color 1
+    assert_eq!(line[8], 0x1202); // OAM 1 alone at x=8
+}
+
+#[test]
+fn cgb_master_priority_off_puts_sprites_on_top() {
+    let mut ppu = cgb_ppu();
+    ppu.vram[0x1800] = 1; // BG color 2
+    ppu.vram[0x2000 + 0x1800] = 0x80; // BG priority bit set!
+    put_tile(&mut ppu, 2, 1);
+    put_sprite(&mut ppu, 0, 16, 8, 2, 0x00);
+    let line = cgb_line(&mut ppu, 0);
+    assert_eq!(line[0], 0x002); // BG priority wins while master is on
+    ppu.lcdc &= !LCDC_BG_ON; // master priority off
+    let line = cgb_line(&mut ppu, 0);
+    assert_eq!(line[0], 0x1001); // sprite now on top of everything
+}

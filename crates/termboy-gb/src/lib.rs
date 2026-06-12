@@ -22,6 +22,12 @@ pub const DMG_GREEN: [Rgb; 4] = [
     Rgb(0x08, 0x18, 0x20),
 ];
 
+/// Expand 5-bit channels to 8 bits: (v << 3) | (v >> 2).
+pub fn rgb555_to_rgb888(c: u16) -> Rgb {
+    let e = |v: u16| ((v << 3) | (v >> 2)) as u8;
+    Rgb(e(c & 31), e((c >> 5) & 31), e((c >> 10) & 31))
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -73,6 +79,11 @@ impl GameBoy {
         &self.cpu.bus.ppu.frame
     }
 
+    /// Raw RGB555 pixels of the last completed CGB frame — used by tests.
+    pub fn frame_rgb555(&self) -> &[u16] {
+        &self.cpu.bus.ppu.frame_rgb
+    }
+
     pub fn cycles(&self) -> u64 {
         self.cpu.bus.cycles
     }
@@ -88,8 +99,14 @@ impl Core for GameBoy {
         while !self.cpu.bus.ppu.frame_ready && self.cpu.bus.cycles < cap {
             self.cpu.step();
         }
-        for (i, &shade) in self.cpu.bus.ppu.frame.iter().enumerate() {
-            self.frame.pixels[i] = self.palette[shade as usize];
+        if self.cpu.bus.cgb {
+            for (i, &c) in self.cpu.bus.ppu.frame_rgb.iter().enumerate() {
+                self.frame.pixels[i] = rgb555_to_rgb888(c);
+            }
+        } else {
+            for (i, &shade) in self.cpu.bus.ppu.frame.iter().enumerate() {
+                self.frame.pixels[i] = self.palette[shade as usize];
+            }
         }
         &self.frame
     }
@@ -122,6 +139,13 @@ mod tests {
         let c1 = gb.cycles();
         gb.run_frame(Buttons::default());
         assert_eq!(gb.cycles() - c1, CYCLES_PER_FRAME);
+    }
+
+    #[test]
+    fn rgb555_expands_full_range() {
+        assert_eq!(rgb555_to_rgb888(0x7FFF), Rgb(255, 255, 255));
+        assert_eq!(rgb555_to_rgb888(0x0000), Rgb(0, 0, 0));
+        assert_eq!(rgb555_to_rgb888(0x001F), Rgb(255, 0, 0)); // red is low bits
     }
 
     #[test]
