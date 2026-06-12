@@ -237,7 +237,17 @@ fn run_menu(
         let Some(i) = menu::pick(&roms) else {
             return ExitCode::SUCCESS;
         };
-        let path = roms[i].to_string_lossy().into_owned();
+        if roms[i].kind == menu::Kind::Advance {
+            print!(
+                "\x1b[2J\x1b[H\x1b[0m  Game Boy Advance support is on the roadmap — \
+                 this one will work eventually!\r\n\r\n  press any key"
+            );
+            use std::io::Write as _;
+            std::io::stdout().flush().ok();
+            let _ = event::read();
+            continue;
+        }
+        let path = roms[i].path.to_string_lossy().into_owned();
         match load_game(&path, palette) {
             Ok((gb, sav)) => {
                 let mut input = input::Input::new(guard.enhanced, keymap.clone());
