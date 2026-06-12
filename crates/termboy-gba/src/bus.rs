@@ -25,6 +25,9 @@ pub struct Bus {
     /// Number of timing events processed (2 per line: start, hblank).
     events_done: u64,
     pub(crate) dma: [crate::dma::Dma; 4],
+    pub(crate) timers: [crate::timers::Timer; 4],
+    /// Cycle count the timers were last advanced to.
+    pub(crate) timers_synced: u64,
     /// Set by HALTCNT / the Halt SWI; cleared when IE & IF intersect.
     pub halted: bool,
 }
@@ -45,6 +48,8 @@ impl Bus {
             cycles: 0,
             events_done: 0,
             dma: [crate::dma::Dma::default(); 4],
+            timers: [crate::timers::Timer::default(); 4],
+            timers_synced: 0,
             halted: false,
         }
     }
@@ -53,6 +58,7 @@ impl Bus {
     /// rendering, vblank/hblank/vcount IRQs, and (later tasks) DMA triggers
     /// and timer ticks. Two events per line: line start and hblank.
     pub fn catch_up(&mut self) {
+        self.timers_catch_up();
         loop {
             let k = self.events_done;
             let at = (k / 2) * CYCLES_PER_LINE + (k % 2) * HBLANK_AT;
@@ -260,6 +266,9 @@ impl Bus {
             0x007 => 0,
             0x130 => self.keyinput as u8,
             0x131 => (self.keyinput >> 8) as u8,
+            // Timer counters read live; their io slots hold the reload value
+            0x100 | 0x104 | 0x108 | 0x10C => self.timers[(reg - 0x100) / 4].counter as u8,
+            0x101 | 0x105 | 0x109 | 0x10D => (self.timers[(reg - 0x100) / 4].counter >> 8) as u8,
             _ => self.io[reg],
         }
     }
@@ -268,6 +277,18 @@ impl Bus {
         let reg = (addr as usize) & 0x3FF;
         match reg {
             0x202 | 0x203 => self.io[reg] &= !value, // IF: write-1-to-acknowledge
+            // Timer control: settle the old configuration first, then latch
+            // the reload into the counter on an enable rising edge
+            0x102 | 0x106 | 0x10A | 0x10E => {
+                let t = (reg - 0x100) / 4;
+                let was = self.io[reg] & 0x80 != 0;
+                self.timers_catch_up();
+                self.io[reg] = value;
+                if !was && value & 0x80 != 0 {
+                    self.timers[t].counter = self.io16(0x100 + t * 4);
+                    self.timers[t].rem = 0;
+                }
+            }
             // DMA control bytes: latch on the enable rising edge
             0x0BA | 0x0BB | 0x0C6 | 0x0C7 | 0x0D2 | 0x0D3 | 0x0DE | 0x0DF => {
                 let ch = (reg - 0x0B0) / 0xC;

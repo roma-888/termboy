@@ -10,7 +10,7 @@ mod tests;
 
 use termboy_core::Rgb;
 
-use crate::bus::{Bus, CYCLES_PER_LINE, LINES};
+use crate::bus::Bus;
 
 pub const WIDTH: usize = 240;
 pub const HEIGHT: usize = 160;

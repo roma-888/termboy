@@ -7,6 +7,7 @@ pub mod cpu;
 pub mod dma;
 pub mod keypad;
 pub mod ppu;
+pub mod timers;
 
 use termboy_core::{Buttons, Core, FrameBuffer};
 
