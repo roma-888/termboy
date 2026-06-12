@@ -18,9 +18,16 @@ impl Bus {
             2 => (255, 511),
             _ => (511, 511),
         };
-        let y = (line + vofs) & ymask;
+        // mosaic: sample from the top-left of each mosaic cell
+        let (mh, mv) = if cnt & (1 << 6) != 0 {
+            let m = self.io16(0x04C);
+            ((m & 0xF) as usize + 1, ((m >> 4) & 0xF) as usize + 1)
+        } else {
+            (1, 1)
+        };
+        let y = ((line - line % mv) + vofs) & ymask;
         for x in 0..WIDTH {
-            let xx = (x + hofs) & xmask;
+            let xx = ((x - x % mh) + hofs) & xmask;
             // 512-px maps are stitched from 32x32-tile screen blocks
             let sbb = match size {
                 0 => 0,
@@ -83,11 +90,23 @@ impl Bus {
             let size_tiles = 16usize << ((cnt >> 14) & 3); // 16..128 tiles square
             let size_px = (size_tiles * 8) as i32;
             let wrap = cnt & (1 << 13) != 0;
+            // horizontal mosaic only: vertical needs the previous line's
+            // reference point (rare; refine if a game ever shows it)
+            let mh = if cnt & (1 << 6) != 0 {
+                (self.io16(0x04C) & 0xF) as usize + 1
+            } else {
+                1
+            };
             let (mut cx, mut cy) = (ref_x, ref_y);
             for x in 0..WIDTH {
                 let (mut sx, mut sy) = (cx >> 8, cy >> 8);
                 cx += pa;
                 cy += pc;
+                if mh > 1 && x % mh != 0 {
+                    // re-sample from the mosaic cell origin
+                    self.ppu.bg_line[bg][x] = self.ppu.bg_line[bg][x - x % mh];
+                    continue;
+                }
                 if wrap {
                     sx = sx.rem_euclid(size_px);
                     sy = sy.rem_euclid(size_px);

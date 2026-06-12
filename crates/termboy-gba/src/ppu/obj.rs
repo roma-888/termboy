@@ -42,14 +42,22 @@ impl Bus {
             if ox >= 240 {
                 ox -= 512;
             }
-            let ly = line as i32 - oy;
-            if ly < 0 || ly >= bh {
+            let ly_raw = line as i32 - oy;
+            if ly_raw < 0 || ly_raw >= bh {
                 continue;
             }
             let bpp8 = a0 & 0x2000 != 0;
             let base_tile = (a2 & 0x3FF) as usize;
             let prio = ((a2 >> 10) & 3) as u8;
             let palbank = ((a2 >> 12) & 0xF) as usize;
+            // mosaic: local coords derive from the mosaic-cell origin
+            let (mh, mv) = if a0 & 0x1000 != 0 {
+                let m = self.io16(0x04C);
+                (((m >> 8) & 0xF) as i32 + 1, ((m >> 12) & 0xF) as i32 + 1)
+            } else {
+                (1, 1)
+            };
+            let ly = ((line as i32 - line as i32 % mv) - oy).clamp(0, bh - 1);
             if affine {
                 let group = ((a1 >> 9) & 0x1F) as usize;
                 let pa = self.oam16(group * 32 + 6) as i16 as i32;
@@ -62,6 +70,7 @@ impl Bus {
                     if !(0..WIDTH as i32).contains(&sx) {
                         continue;
                     }
+                    let lx = ((sx - sx % mh) - ox).clamp(0, bw - 1);
                     let dx = lx - bw / 2;
                     let tx = ((pa * dx + pb * dy) >> 8) + w / 2;
                     let ty = ((pc * dx + pd * dy) >> 8) + h / 2;
@@ -83,7 +92,7 @@ impl Bus {
                 if !(0..WIDTH as i32).contains(&sx) {
                     continue;
                 }
-                let mut tx = lx;
+                let mut tx = ((sx - sx % mh) - ox).clamp(0, bw - 1);
                 let mut ty = ly;
                 if a1 & 0x1000 != 0 {
                     tx = w - 1 - tx;

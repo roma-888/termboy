@@ -502,6 +502,46 @@ fn semi_transparent_obj_forces_alpha() {
 }
 
 #[test]
+fn bg_mosaic_repeats_cell_origin() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0100);
+    b.write16(0x0400_0008, 0x0140); // BG0CNT: mosaic + screen base 1
+    b.write16(0x0400_004C, 0x0033); // BG mosaic 4x4
+    b.write16(0x0500_0002, 0x001F);
+    // tile 1: only leftmost column = index 1
+    for row in 0..8u32 {
+        b.write16(0x0600_0000 + 32 + row * 4, u16::from_le_bytes([0x01, 0x00]));
+    }
+    set_entry(&mut b, 0x800, 0, 0, 0, 0x0001);
+    render_line(&mut b, 0);
+    // the 1px column smears across the 4px mosaic cell
+    assert_eq!(b.ppu.frame[0], 0x001F);
+    assert_eq!(b.ppu.frame[3], 0x001F);
+    assert_eq!(b.ppu.frame[4], 0x0000);
+    // line 5 samples line 4's content (cell origin), same column
+    render_line(&mut b, 5);
+    assert_eq!(b.ppu.frame[5 * WIDTH], 0x001F);
+}
+
+#[test]
+fn obj_mosaic_smears_horizontally() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x1000);
+    b.write16(0x0400_004C, 0x0300); // OBJ mosaic h=4
+    b.write16(0x0500_0202, 0x001F);
+    // obj tile 1: leftmost column only
+    for row in 0..8u32 {
+        b.write16(0x0601_0000 + 32 + row * 4, u16::from_le_bytes([0x01, 0x00]));
+        b.write16(0x0601_0000 + 32 + row * 4 + 2, 0x0000);
+    }
+    set_obj(&mut b, 0, 0x1000, 0x0000, 0x0001); // mosaic bit (attr0 bit 12)
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x001F);
+    assert_eq!(b.ppu.frame[3], 0x001F); // smeared
+    assert_eq!(b.ppu.frame[4], 0x0000);
+}
+
+#[test]
 fn mode5_small_bitmap_with_backdrop_border() {
     let mut b = bus();
     set_dispcnt(&mut b, 0x0405); // mode 5, BG2, page 0
