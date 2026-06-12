@@ -239,6 +239,108 @@ fn cmp_tst_only_set_flags() {
 }
 
 #[test]
+fn mrs_reads_cpsr() {
+    let mut cpu = cpu_with(&[0xE10F_0000]); // MRS r0, CPSR
+    cpu.step();
+    assert_eq!(cpu.regs.get(0) & 0x1F, 0x1F); // System mode bits
+}
+
+#[test]
+fn msr_switches_mode_and_banks() {
+    let mut cpu = cpu_with(&[0xE121_F000]); // MSR CPSR_c, r0
+    cpu.regs.set(0, 0x12); // IRQ mode
+    cpu.step();
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::Irq);
+    assert_eq!(cpu.regs.get(13), 0x0300_7FA0); // IRQ stack appeared
+}
+
+#[test]
+fn msr_flag_immediate() {
+    let mut cpu = cpu_with(&[0xE328_F4F0]); // MSR CPSR_f, #0xF0000000
+    cpu.step();
+    assert!(cpu.regs.cpsr.flag(N) && cpu.regs.cpsr.flag(Z));
+    assert!(cpu.regs.cpsr.flag(C) && cpu.regs.cpsr.flag(V));
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::System); // control byte untouched
+}
+
+#[test]
+fn msr_cannot_set_thumb_bit() {
+    let mut cpu = cpu_with(&[0xE121_F000]); // MSR CPSR_c, r0
+    cpu.regs.set(0, 0x3F); // System mode + T bit
+    cpu.step();
+    assert!(!cpu.regs.cpsr.thumb());
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::System);
+}
+
+#[test]
+fn msr_mrs_spsr_roundtrip() {
+    // MSR CPSR_c, r0 ; MSR SPSR_fc, r1 ; MRS r2, SPSR
+    let mut cpu = cpu_with(&[0xE121_F000, 0xE169_F001, 0xE14F_2000]);
+    cpu.regs.set(0, 0x12); // to IRQ mode (it has an SPSR)
+    cpu.regs.set(1, 0xF000_0013);
+    cpu.step();
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(2), 0xF000_0013);
+}
+
+#[test]
+fn mul_and_mla() {
+    // MUL r0, r1, r2 ; MLA r3, r1, r2, r0
+    let mut cpu = cpu_with(&[0xE000_0291, 0xE023_0291]);
+    cpu.regs.set(1, 7);
+    cpu.regs.set(2, 6);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 42);
+    cpu.step();
+    assert_eq!(cpu.regs.get(3), 84); // 7*6 + r0(42)
+}
+
+#[test]
+fn muls_sets_n_and_z() {
+    let mut cpu = cpu_with(&[0xE010_0291, 0xE010_0291]); // MULS r0, r1, r2
+    cpu.regs.set(1, 0xFFFF_FFFF); // -1
+    cpu.regs.set(2, 1);
+    cpu.step();
+    assert!(cpu.regs.cpsr.flag(N) && !cpu.regs.cpsr.flag(Z));
+    cpu.regs.set(2, 0);
+    cpu.step();
+    assert!(cpu.regs.cpsr.flag(Z) && !cpu.regs.cpsr.flag(N));
+}
+
+#[test]
+fn umull_unsigned_64() {
+    let mut cpu = cpu_with(&[0xE081_0392]); // UMULL r0, r1, r2, r3
+    cpu.regs.set(2, 0xFFFF_FFFF);
+    cpu.regs.set(3, 2);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0xFFFF_FFFE); // low
+    assert_eq!(cpu.regs.get(1), 1); // high
+}
+
+#[test]
+fn smull_signed_64() {
+    let mut cpu = cpu_with(&[0xE0C1_0392]); // SMULL r0, r1, r2, r3
+    cpu.regs.set(2, 0xFFFF_FFFF); // -1
+    cpu.regs.set(3, 2);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0xFFFF_FFFE); // -2 low
+    assert_eq!(cpu.regs.get(1), 0xFFFF_FFFF); // -2 high
+}
+
+#[test]
+fn umlal_accumulates() {
+    let mut cpu = cpu_with(&[0xE0A1_0392]); // UMLAL r0, r1, r2, r3
+    cpu.regs.set(0, 5); // existing low
+    cpu.regs.set(1, 1); // existing high
+    cpu.regs.set(2, 2);
+    cpu.regs.set(3, 3);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 11); // (1<<32 | 5) + 6
+    assert_eq!(cpu.regs.get(1), 1);
+}
+
+#[test]
 fn mov_to_pc_branches() {
     let mut cpu = cpu_with(&[0xE3A0_F00C]); // MOV pc, #12
     cpu.step();

@@ -59,10 +59,46 @@ impl Cpu {
 
     // The rest of the cascade lands in Tasks 6-11; stubs keep it honest:
     fn arm_multiply(&mut self, op: u32) {
-        self.todo(op)
+        let rd = ((op >> 16) & 0xF) as usize;
+        let rn = ((op >> 12) & 0xF) as usize;
+        let rs = ((op >> 8) & 0xF) as usize;
+        let rm = (op & 0xF) as usize;
+        let mut result = self.regs.get(rm).wrapping_mul(self.regs.get(rs));
+        if op & (1 << 21) != 0 {
+            result = result.wrapping_add(self.regs.get(rn)); // MLA
+            self.bus.idle();
+        }
+        self.bus.idle(); // coarse internal multiply time
+        if op & (1 << 20) != 0 {
+            self.set_nz(result); // C unpredictable on ARM7 muls: left unchanged
+        }
+        self.regs.set(rd, result);
     }
+
     fn arm_multiply_long(&mut self, op: u32) {
-        self.todo(op)
+        use super::psr::{N, Z};
+        let rdhi = ((op >> 16) & 0xF) as usize;
+        let rdlo = ((op >> 12) & 0xF) as usize;
+        let rs = self.regs.get(((op >> 8) & 0xF) as usize);
+        let rm = self.regs.get((op & 0xF) as usize);
+        let mut result = if op & (1 << 22) != 0 {
+            (rm as i32 as i64).wrapping_mul(rs as i32 as i64) as u64 // signed
+        } else {
+            (rm as u64) * (rs as u64)
+        };
+        if op & (1 << 21) != 0 {
+            let acc = ((self.regs.get(rdhi) as u64) << 32) | self.regs.get(rdlo) as u64;
+            result = result.wrapping_add(acc);
+            self.bus.idle();
+        }
+        self.bus.idle();
+        self.bus.idle();
+        if op & (1 << 20) != 0 {
+            self.regs.cpsr.set_flag(N, result >> 63 != 0);
+            self.regs.cpsr.set_flag(Z, result == 0);
+        }
+        self.regs.set(rdhi, (result >> 32) as u32);
+        self.regs.set(rdlo, result as u32);
     }
     fn arm_swap(&mut self, op: u32) {
         self.todo(op)
@@ -71,10 +107,44 @@ impl Cpu {
         self.todo(op)
     }
     fn arm_mrs(&mut self, op: u32) {
-        self.todo(op)
+        let v = if op & (1 << 22) != 0 { self.regs.spsr().0 } else { self.regs.cpsr.0 };
+        self.regs.set(((op >> 12) & 0xF) as usize, v);
     }
+
     fn arm_msr(&mut self, op: u32) {
-        self.todo(op)
+        use super::psr::{Mode, Psr, T};
+        let value = if op & (1 << 25) != 0 {
+            let rot = (op >> 8) & 0xF;
+            (op & 0xFF).rotate_right(rot * 2)
+        } else {
+            self.regs.get((op & 0xF) as usize)
+        };
+        let mut mask = 0u32;
+        if op & (1 << 16) != 0 {
+            mask |= 0x0000_00FF;
+        }
+        if op & (1 << 17) != 0 {
+            mask |= 0x0000_FF00;
+        }
+        if op & (1 << 18) != 0 {
+            mask |= 0x00FF_0000;
+        }
+        if op & (1 << 19) != 0 {
+            mask |= 0xFF00_0000;
+        }
+        if op & (1 << 22) != 0 {
+            // SPSR target
+            let cur = self.regs.spsr().0;
+            self.regs.set_spsr(Psr((cur & !mask) | (value & mask)));
+        } else {
+            if self.regs.cpsr.mode() == Mode::User {
+                mask &= 0xF000_0000; // unprivileged: flags only
+            }
+            let cur = self.regs.cpsr.0;
+            // The T bit cannot be changed by MSR on ARM7 — only BX switches state.
+            let new = (((cur & !mask) | (value & mask)) & !T) | (cur & T);
+            self.regs.write_cpsr(Psr(new));
+        }
     }
     /// Decode operand 2: rotated immediate, or rm shifted by imm/register.
     /// Returns (value, shifter carry-out).
