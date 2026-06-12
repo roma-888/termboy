@@ -134,6 +134,69 @@ fn mode4_renders_palette_indices_with_page_flip() {
 }
 
 #[test]
+fn text_bg_renders_4bpp_tile_with_palette_bank() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0100); // mode 0, BG0
+    b.write16(0x0400_0008, 0x0000); // BG0CNT: char base 0, screen base 0, 32x32
+    b.write16(0x0500_0022, 0x001F); // palette bank 1, index 1 = red
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    set_entry(&mut b, 0, 0, 0, 0, 0x1001); // tile 1, palbank 1 at (0,0)
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x001F);
+    assert_eq!(b.ppu.frame[8], 0x0000); // next tile is map entry 0 = tile 0 = blank
+}
+
+#[test]
+fn text_bg_scrolls_and_wraps() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0100);
+    // screen base block 1: keep the map clear of tile 0's character data
+    b.write16(0x0400_0008, 0x0100);
+    b.write16(0x0500_0002, 0x03E0); // palette index 1 = green
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    set_entry(&mut b, 0x800, 0, 0, 0, 0x0001); // tile at map (0,0)
+    b.write16(0x0400_0010, 250); // HOFS=250: map x wraps on-screen at x=6
+    b.write16(0x0400_0012, 0x00F8); // VOFS=248: line 8 wraps to map y=0
+    render_line(&mut b, 8);
+    // screen (0,8): map coords (250, 0) -> tile (31,0) = blank
+    assert_eq!(b.ppu.frame[8 * WIDTH], 0x0000);
+    // screen x=6 -> map x=(6+250)&255=0 -> tile (0,0) -> green
+    assert_eq!(b.ppu.frame[8 * WIDTH + 6], 0x03E0);
+}
+
+#[test]
+fn text_bg_8bpp_and_flips() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0200); // mode 0, BG1
+    b.write16(0x0400_000A, 0x0080); // BG1CNT: 8bpp
+    b.write16(0x0500_0000 + 2 * 7, 0x7C00); // palette index 7 = blue
+    // 8bpp tile 1: only leftmost column = index 7
+    for row in 0..8u32 {
+        b.write16(0x0600_0000 + 64 + row * 8, 0x0007);
+    }
+    set_entry(&mut b, 0, 0, 0, 0, 0x0001); // tile 1
+    set_entry(&mut b, 0, 0, 1, 0, 0x0401); // tile 1, hflip
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x7C00); // left column
+    assert_eq!(b.ppu.frame[1], 0x0000);
+    assert_eq!(b.ppu.frame[15], 0x7C00); // hflip: column shows at right edge
+    assert_eq!(b.ppu.frame[8], 0x0000);
+}
+
+#[test]
+fn text_bg_512_wide_uses_second_screen_block() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0100);
+    b.write16(0x0400_0008, 0x4000); // BG0CNT: size 1 (512x256)
+    b.write16(0x0500_0002, 0x001F);
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    set_entry(&mut b, 0, 1, 0, 0, 0x0001); // tile in screen block 1 (x 256-511)
+    b.write16(0x0400_0010, 256); // HOFS=256
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x001F);
+}
+
+#[test]
 fn mode5_small_bitmap_with_backdrop_border() {
     let mut b = bus();
     set_dispcnt(&mut b, 0x0405); // mode 5, BG2, page 0
