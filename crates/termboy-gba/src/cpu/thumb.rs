@@ -321,27 +321,135 @@ impl Cpu {
         let sp = if op & (1 << 7) != 0 { sp.wrapping_sub(imm) } else { sp.wrapping_add(imm) };
         self.regs.set(13, sp);
     }
+    // ---- Format 14: push/pop ----
     fn t_push_pop(&mut self, op: u16) {
-        self.t_todo(op)
-    }
-    fn t_multiple(&mut self, op: u16) {
-        self.t_todo(op)
-    }
-    fn t_cond_branch(&mut self, op: u16) {
-        self.t_todo(op)
-    }
-    fn t_swi(&mut self, op: u16) {
-        self.t_todo(op)
-    }
-    fn t_branch(&mut self, op: u16) {
-        self.t_todo(op)
-    }
-    fn t_long_branch(&mut self, op: u16) {
-        self.t_todo(op)
+        let with_extra = op & (1 << 8) != 0; // LR on push, PC on pop
+        if op & (1 << 11) == 0 {
+            // PUSH = STMDB sp!
+            let count = (op as u32 & 0xFF).count_ones() + with_extra as u32;
+            let mut addr = self.regs.get(13).wrapping_sub(count * 4);
+            self.regs.set(13, addr);
+            for i in 0..8usize {
+                if op & (1 << i) != 0 {
+                    let v = self.regs.get(i);
+                    self.bus.write32(addr, v);
+                    addr = addr.wrapping_add(4);
+                }
+            }
+            if with_extra {
+                let v = self.regs.get(14);
+                self.bus.write32(addr, v);
+            }
+        } else {
+            // POP = LDMIA sp!
+            let mut addr = self.regs.get(13);
+            self.bus.idle();
+            for i in 0..8usize {
+                if op & (1 << i) != 0 {
+                    let v = self.bus.read32(addr);
+                    addr = addr.wrapping_add(4);
+                    self.regs.set(i, v);
+                }
+            }
+            if with_extra {
+                let v = self.bus.read32(addr);
+                addr = addr.wrapping_add(4);
+                self.regs.set(15, v); // flush masks bit 0; state never changes
+                self.flush();
+            }
+            self.regs.set(13, addr);
+        }
     }
 
-    fn t_todo(&mut self, op: u16) {
-        let _ = Mode::User; // used by t_swi in Task 14
-        unimplemented!("thumb opcode {op:#06X} at {:#010X}", self.exec_addr().wrapping_sub(2))
+    // ---- Format 15: multiple load/store (STMIA/LDMIA rb!) ----
+    fn t_multiple(&mut self, op: u16) {
+        let rb = ((op >> 8) & 7) as usize;
+        let base = self.regs.get(rb);
+        let rlist = op & 0xFF;
+        if rlist == 0 {
+            // ARMv4 quirk, same as ARM LDM/STM: r15 transfers, base +0x40
+            if op & (1 << 11) != 0 {
+                let v = self.bus.read32(base);
+                self.regs.set(15, v);
+                self.flush();
+            } else {
+                let v = self.regs.get(15).wrapping_add(2);
+                self.bus.write32(base, v);
+            }
+            self.regs.set(rb, base.wrapping_add(0x40));
+            return;
+        }
+        let count = (rlist as u32).count_ones();
+        let mut addr = base;
+        if op & (1 << 11) != 0 {
+            // LDMIA: writeback first, loaded value wins if rb is listed
+            self.bus.idle();
+            self.regs.set(rb, base.wrapping_add(count * 4));
+            for i in 0..8usize {
+                if rlist & (1 << i) != 0 {
+                    let v = self.bus.read32(addr);
+                    addr = addr.wrapping_add(4);
+                    self.regs.set(i, v);
+                }
+            }
+        } else {
+            // STMIA: rb in list stores old base if first, new base otherwise
+            let new_base = base.wrapping_add(count * 4);
+            let mut first = true;
+            for i in 0..8usize {
+                if rlist & (1 << i) != 0 {
+                    let v = if i == rb && !first { new_base } else { self.regs.get(i) };
+                    self.bus.write32(addr, v);
+                    addr = addr.wrapping_add(4);
+                    first = false;
+                }
+            }
+            self.regs.set(rb, new_base);
+        }
+    }
+
+    // ---- Format 16: conditional branch ----
+    fn t_cond_branch(&mut self, op: u16) {
+        if self.check_cond(((op >> 8) & 0xF) as u8) {
+            let offset = ((op & 0xFF) as i8 as i32 as u32) << 1;
+            let target = self.regs.get(15).wrapping_add(offset);
+            self.regs.set(15, target);
+            self.flush();
+        }
+    }
+
+    // ---- Format 17: SWI ----
+    fn t_swi(&mut self, op: u16) {
+        if self.hle_bios {
+            self.bios_call((op & 0xFF) as u32);
+        } else {
+            let lr = self.regs.get(15).wrapping_sub(2);
+            self.exception(0x08, Mode::Supervisor, lr);
+        }
+    }
+
+    // ---- Format 18: unconditional branch ----
+    fn t_branch(&mut self, op: u16) {
+        let offset = ((((op & 0x7FF) as i32) << 21) >> 20) as u32; // ±2KB
+        let target = self.regs.get(15).wrapping_add(offset);
+        self.regs.set(15, target);
+        self.flush();
+    }
+
+    // ---- Format 19: long branch with link (two halves) ----
+    fn t_long_branch(&mut self, op: u16) {
+        if op & (1 << 11) == 0 {
+            // first half: LR = PC + (signext(offset11) << 12)
+            let offset = ((((op & 0x7FF) as i32) << 21) >> 9) as u32;
+            let lr = self.regs.get(15).wrapping_add(offset);
+            self.regs.set(14, lr);
+        } else {
+            // second half: branch, LR = address after the pair, thumb bit set
+            let target = self.regs.get(14).wrapping_add(((op & 0x7FF) as u32) << 1);
+            let lr = self.regs.get(15).wrapping_sub(2) | 1;
+            self.regs.set(14, lr);
+            self.regs.set(15, target);
+            self.flush();
+        }
     }
 }

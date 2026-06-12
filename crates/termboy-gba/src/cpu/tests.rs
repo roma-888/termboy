@@ -286,6 +286,87 @@ fn thumb_adjust_sp() {
 }
 
 #[test]
+fn thumb_push_pop_with_lr_pc() {
+    // PUSH {r0, lr} ; POP {r1, pc}
+    let mut cpu = thumb_cpu_with(&[0xB501, 0xBD02]);
+    let sp0 = cpu.regs.get(13);
+    cpu.regs.set(0, 0x77);
+    cpu.regs.set(14, 0x0800_0021); // odd: POP pc ignores bit 0 on ARMv4
+    cpu.step();
+    assert_eq!(cpu.regs.get(13), sp0 - 8);
+    cpu.step();
+    assert_eq!(cpu.regs.get(13), sp0);
+    assert_eq!(cpu.regs.get(1), 0x77);
+    assert_eq!(cpu.exec_addr(), 0x0800_0020);
+    assert!(cpu.regs.cpsr.thumb()); // ARMv4: POP pc never changes state
+}
+
+#[test]
+fn thumb_stmia_ldmia_with_writeback() {
+    // STMIA r0!, {r1, r2} ; SUB r0, #8 ; LDMIA r0!, {r3, r4}
+    let mut cpu = thumb_cpu_with(&[0xC006, 0x3808, 0xC818]);
+    cpu.regs.set(0, 0x0200_0000);
+    cpu.regs.set(1, 0xAA);
+    cpu.regs.set(2, 0xBB);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x0200_0008);
+    cpu.step();
+    cpu.step();
+    assert_eq!((cpu.regs.get(3), cpu.regs.get(4)), (0xAA, 0xBB));
+    assert_eq!(cpu.regs.get(0), 0x0200_0008);
+}
+
+#[test]
+fn thumb_conditional_branch() {
+    // CMP r0,#0 ; BEQ +1 ; MOV r1,#1 ; MOV r2,#2
+    let mut cpu = thumb_cpu_with(&[0x2800, 0xD000, 0x2101, 0x2202]);
+    cpu.step();
+    cpu.step(); // taken: skips MOV r1,#1
+    cpu.step();
+    assert_eq!(cpu.regs.get(1), 0);
+    assert_eq!(cpu.regs.get(2), 2);
+}
+
+#[test]
+fn thumb_unconditional_branch_to_self() {
+    let mut cpu = thumb_cpu_with(&[0xE7FE]); // b $
+    let before = cpu.exec_addr();
+    cpu.step();
+    assert_eq!(cpu.exec_addr(), before);
+}
+
+#[test]
+fn thumb_long_branch_with_link() {
+    // BL +4: F000 F802 -> target 0x08000008, lr = return | 1
+    let mut cpu = thumb_cpu_with(&[0xF000, 0xF802]);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.exec_addr(), 0x0800_0008);
+    assert_eq!(cpu.regs.get(14), 0x0800_0005); // after-BL address, thumb bit set
+}
+
+#[test]
+fn thumb_swi_hle_div() {
+    let mut cpu = thumb_cpu_with(&[0xDF06]); // SWI 6
+    cpu.regs.set(0, 100);
+    cpu.regs.set(1, 7);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 14);
+    assert_eq!(cpu.regs.get(1), 2);
+}
+
+#[test]
+fn thumb_swi_without_hle_enters_arm_supervisor() {
+    let mut cpu = thumb_cpu_with(&[0xDF06]);
+    cpu.hle_bios = false;
+    cpu.step();
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::Supervisor);
+    assert!(!cpu.regs.cpsr.thumb()); // exceptions always enter ARM state
+    assert_eq!(cpu.regs.get(14), 0x0800_0002);
+    assert_eq!(cpu.exec_addr(), 0x0000_0008);
+}
+
+#[test]
 fn thumb_pc_relative_load_word_aligns() {
     // at 0x08000000: LDR r0, [pc, #4] -> (0x08000004 & !2) + 4 = 0x08000008
     let mut cpu = thumb_cpu_with(&[0x4801, 0, 0, 0, 0x5544, 0x7766]);
