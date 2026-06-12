@@ -262,6 +262,130 @@ fn affine_bg_wrap_bit() {
     assert_eq!(b.ppu.frame[WIDTH], 0x001F);
 }
 
+/// Minimal sprite writer: attrs for OAM entry n.
+fn set_obj(b: &mut Bus, n: u32, a0: u16, a1: u16, a2: u16) {
+    b.write16(0x0700_0000 + n * 8, a0);
+    b.write16(0x0700_0000 + n * 8 + 2, a1);
+    b.write16(0x0700_0000 + n * 8 + 4, a2);
+}
+
+/// 8x8 4bpp OBJ tile in slot `tile`, all pixels = `idx`.
+fn fill_obj_tile_4bpp(b: &mut Bus, tile: u32, idx: u8) {
+    let byte = idx | (idx << 4);
+    for i in 0..16 {
+        b.write16(0x0601_0000 + tile * 32 + i * 2, u16::from_le_bytes([byte, byte]));
+    }
+}
+
+/// Affine parameter group g: PA/PB/PC/PD as 8.8 fixed point.
+fn set_affine_params(b: &mut Bus, g: u32, pa: i16, pb: i16, pc: i16, pd: i16) {
+    b.write16(0x0700_0000 + g * 32 + 6, pa as u16);
+    b.write16(0x0700_0000 + g * 32 + 14, pb as u16);
+    b.write16(0x0700_0000 + g * 32 + 22, pc as u16);
+    b.write16(0x0700_0000 + g * 32 + 30, pd as u16);
+}
+
+#[test]
+fn obj_renders_at_position_with_priority_over_bg() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x1100); // mode 0, BG0 + OBJ
+    b.write16(0x0400_0008, 0x0002); // BG0 priority 2
+    b.write16(0x0500_0002, 0x03E0); // BG palette 1 = green
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    set_entry(&mut b, 0x800, 0, 1, 0, 0x0001); // bg tile at x 8-15
+    b.write16(0x0400_0008, 0x0102); // BG0: prio 2, screen base 1
+    b.write16(0x0500_0202, 0x001F); // OBJ palette 1 = red
+    fill_obj_tile_4bpp(&mut b, 1, 1);
+    set_obj(&mut b, 0, 0x0000, 0x0008, 0x0401); // 8x8 at (8,0), prio 1, tile 1
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[8], 0x001F); // sprite (prio 1) over bg (prio 2)
+    assert_eq!(b.ppu.frame[16], 0x0000); // sprite is 8 wide
+    // flip priorities: bg wins
+    b.write16(0x0400_0008, 0x0100); // BG0: prio 0
+    set_obj(&mut b, 0, 0x0000, 0x0008, 0x0801); // prio 2
+    render_line(&mut b, 1);
+    assert_eq!(b.ppu.frame[WIDTH + 8], 0x03E0);
+}
+
+#[test]
+fn obj_y_wrap_disable_and_lowest_index_wins() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x1000); // OBJ only
+    b.write16(0x0500_0202, 0x001F); // OBJ pal 1 = red
+    b.write16(0x0500_0204, 0x03E0); // OBJ pal 2 = green
+    fill_obj_tile_4bpp(&mut b, 1, 1);
+    fill_obj_tile_4bpp(&mut b, 2, 2);
+    fill_obj_tile_4bpp(&mut b, 33, 1); // 2D mapping: row 1 of the tall sprite
+    // y=248 wraps to -8: 16-tall sprite shows rows 8-15 on lines 0-7
+    set_obj(&mut b, 0, 0x80F8, 0x0000, 0x0001); // 8x16 (shape vertical, size 0) at (0,-8)
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x001F); // ly=8 -> tile slot 1 + 32 (2D stride)
+    // disabled sprite renders nothing; overlapping: index 1 loses to index 0
+    set_obj(&mut b, 0, 0x0000, 0x0000, 0x0001); // idx 0: red at (0,0)
+    set_obj(&mut b, 1, 0x0000, 0x0000, 0x0002); // idx 1: green, same spot
+    render_line(&mut b, 1);
+    assert_eq!(b.ppu.frame[WIDTH], 0x001F); // lowest OAM index wins
+    set_obj(&mut b, 0, 0x0200, 0x0000, 0x0001); // disable bit
+    render_line(&mut b, 2);
+    assert_eq!(b.ppu.frame[2 * WIDTH], 0x03E0); // idx 1 shows now
+}
+
+#[test]
+fn obj_flips_and_1d_mapping() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x1040); // OBJ + 1D mapping
+    b.write16(0x0500_0202, 0x001F);
+    // tile 1: left column only; tile 2: all pixels (the 16x8 sprite's right half)
+    for row in 0..8u32 {
+        b.write16(0x0601_0000 + 32 + row * 4, 0x0001);
+        b.write16(0x0601_0000 + 32 + row * 4 + 2, 0x0000);
+    }
+    fill_obj_tile_4bpp(&mut b, 2, 1);
+    // 16x8 (shape horizontal, size 0), 1D: tiles 1,2 consecutive
+    set_obj(&mut b, 0, 0x4000, 0x0000, 0x0001);
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x001F); // tile 1 left column
+    assert_eq!(b.ppu.frame[1], 0x0000);
+    assert_eq!(b.ppu.frame[8], 0x001F); // tile 2 solid
+    // hflip the whole sprite: solid half moves left, column to x=15
+    set_obj(&mut b, 0, 0x4000, 0x1000, 0x0001);
+    render_line(&mut b, 1);
+    assert_eq!(b.ppu.frame[WIDTH], 0x001F); // solid tile now left
+    assert_eq!(b.ppu.frame[WIDTH + 15], 0x001F); // column at right edge
+    assert_eq!(b.ppu.frame[WIDTH + 14], 0x0000);
+}
+
+#[test]
+fn affine_obj_identity_matches_regular() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x1000);
+    b.write16(0x0500_0202, 0x001F);
+    fill_obj_tile_4bpp(&mut b, 1, 1);
+    set_affine_params(&mut b, 0, 0x100, 0, 0, 0x100);
+    set_obj(&mut b, 0, 0x0100, 0x0000, 0x0001); // affine, group 0, 8x8 at (0,0)
+    render_line(&mut b, 3);
+    assert_eq!(b.ppu.frame[3 * WIDTH], 0x001F);
+    assert_eq!(b.ppu.frame[3 * WIDTH + 7], 0x001F);
+    assert_eq!(b.ppu.frame[3 * WIDTH + 8], 0x0000);
+}
+
+#[test]
+fn affine_obj_half_scale_shrinks_with_double_size_canvas() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x1000);
+    b.write16(0x0500_0202, 0x001F);
+    fill_obj_tile_4bpp(&mut b, 1, 1);
+    set_affine_params(&mut b, 0, 0x200, 0, 0, 0x200); // PA=2.0: half size on screen
+    // affine + double (bit9): 8x8 sprite on a 16x16 canvas at (0,0)
+    set_obj(&mut b, 0, 0x0300, 0x0000, 0x0001);
+    render_line(&mut b, 8); // canvas centre row (ly=8, dy=0)
+    // tx = 2*(lx-8) + 4, visible while tx in 0..8 -> canvas x 6..=9
+    assert_eq!(b.ppu.frame[8 * WIDTH + 6], 0x001F);
+    assert_eq!(b.ppu.frame[8 * WIDTH + 9], 0x001F);
+    assert_eq!(b.ppu.frame[8 * WIDTH + 5], 0x0000); // tx = -2: outside
+    assert_eq!(b.ppu.frame[8 * WIDTH + 10], 0x0000); // tx = 8: outside
+}
+
 #[test]
 fn mode5_small_bitmap_with_backdrop_border() {
     let mut b = bus();
