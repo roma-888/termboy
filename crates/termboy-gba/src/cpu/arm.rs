@@ -399,13 +399,20 @@ impl Cpu {
         }
     }
     fn arm_swi(&mut self, op: u32) {
-        self.todo(op)
-    }
-    fn arm_undefined(&mut self, op: u32) {
-        self.todo(op)
+        use super::psr::Mode;
+        if self.hle_bios {
+            // ARM convention: the function number is the comment's top byte
+            self.bios_call((op >> 16) & 0xFF);
+        } else {
+            let lr = self.regs.get(15).wrapping_sub(4);
+            self.exception(0x08, Mode::Supervisor, lr);
+        }
     }
 
-    fn todo(&mut self, op: u32) {
-        unimplemented!("ARM opcode {op:#010X} at {:#010X}", self.exec_addr().wrapping_sub(4))
+    fn arm_undefined(&mut self, op: u32) {
+        use super::psr::Mode;
+        let _ = op;
+        let lr = self.regs.get(15).wrapping_sub(4);
+        self.exception(0x04, Mode::Undefined, lr);
     }
 }

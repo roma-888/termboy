@@ -557,6 +557,73 @@ fn ldm_with_pc_and_s_bit_restores_cpsr() {
 }
 
 #[test]
+fn swi_hle_div() {
+    let mut cpu = cpu_with(&[0xEF06_0000]); // SWI 0x60000 -- the ROMs' Div idiom
+    cpu.regs.set(0, 1234);
+    cpu.regs.set(1, 100);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 12); // quotient
+    assert_eq!(cpu.regs.get(1), 34); // remainder
+    assert_eq!(cpu.regs.get(3), 12); // |quotient|
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::System); // HLE: no mode switch
+}
+
+#[test]
+fn swi_hle_div_negative() {
+    let mut cpu = cpu_with(&[0xEF06_0000]);
+    cpu.regs.set(0, (-7i32) as u32);
+    cpu.regs.set(1, 2);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0) as i32, -3);
+    assert_eq!(cpu.regs.get(1) as i32, -1);
+    assert_eq!(cpu.regs.get(3), 3);
+}
+
+#[test]
+fn swi_without_hle_takes_the_vector() {
+    let mut cpu = cpu_with(&[0xEF06_0000]);
+    cpu.hle_bios = false;
+    let old_cpsr = cpu.regs.cpsr;
+    cpu.step();
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::Supervisor);
+    assert_eq!(cpu.regs.get(14), 0x0800_0004); // return past the SWI
+    assert_eq!(cpu.exec_addr(), 0x0000_0008); // SWI vector
+    assert!(cpu.regs.cpsr.flag(I)); // IRQs masked
+    assert_eq!(cpu.regs.spsr(), old_cpsr);
+}
+
+#[test]
+fn undefined_instruction_takes_the_vector() {
+    let mut cpu = cpu_with(&[0xE7F0_00F0]); // permanently-undefined encoding
+    cpu.step();
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::Undefined);
+    assert_eq!(cpu.regs.get(14), 0x0800_0004);
+    assert_eq!(cpu.exec_addr(), 0x0000_0004);
+}
+
+#[test]
+fn irq_entry_and_masking() {
+    let mut cpu = cpu_with(&[0xE1A0_0000, 0xE1A0_0000]); // NOPs
+    cpu.step();
+    cpu.irq();
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::Irq);
+    // lr_irq = next instruction + 4 (handlers return with SUBS pc, lr, #4)
+    assert_eq!(cpu.regs.get(14), 0x0800_0008);
+    assert_eq!(cpu.exec_addr(), 0x0000_0018);
+    let mode_before = cpu.regs.cpsr.mode();
+    cpu.irq(); // I is now set -> ignored
+    assert_eq!(cpu.regs.cpsr.mode(), mode_before);
+    assert_eq!(cpu.exec_addr(), 0x0000_0018);
+}
+
+#[test]
+#[should_panic(expected = "HLE BIOS function")]
+fn unimplemented_bios_function_panics_loudly() {
+    let mut cpu = cpu_with(&[0xEF0B_0000]); // SWI 0x0B (CpuSet) -- G4
+    cpu.step();
+}
+
+#[test]
 fn mov_to_pc_branches() {
     let mut cpu = cpu_with(&[0xE3A0_F00C]); // MOV pc, #12
     cpu.step();
