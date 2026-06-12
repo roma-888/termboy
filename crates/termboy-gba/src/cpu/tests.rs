@@ -869,7 +869,7 @@ fn irq_entry_and_masking() {
 #[test]
 #[should_panic(expected = "HLE BIOS function")]
 fn unimplemented_bios_function_panics_loudly() {
-    let mut cpu = cpu_with(&[0xEF0B_0000]); // SWI 0x0B (CpuSet) -- G4
+    let mut cpu = cpu_with(&[0xEF26_0000]); // SWI 0x26 (HardReset) -- not HLE'd
     cpu.step();
 }
 

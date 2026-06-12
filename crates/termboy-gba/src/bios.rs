@@ -30,7 +30,10 @@ impl Cpu {
                 let r = arctan2(self.regs.get(0) as i32, self.regs.get(1) as i32);
                 self.regs.set(0, r);
             }
+            0x0B => self.cpu_set(),
+            0x0C => self.cpu_fast_set(),
             0x0D => self.regs.set(0, 0xBAAE_187F), // GetBiosChecksum
+            0x10 => self.bit_unpack(),
             0x19 => {} // SoundBias: no APU until G6
             // The BIOS-resident sound driver: m4a games carry their own copy
             // in ROM and never call these (except MidiKey2Freq below).
@@ -134,6 +137,89 @@ impl Cpu {
             self.wipe(0x0400_0200, 0x0400_020C);
         }
         self.bus.write16(0x0400_0000, 0x0080); // always leaves forced blank
+    }
+
+    /// CpuSet: r0=src, r1=dst, r2 = count | fill<<24 | word<<26.
+    fn cpu_set(&mut self) {
+        let ctrl = self.regs.get(2);
+        let count = ctrl & 0x1F_FFFF;
+        let fill = ctrl & (1 << 24) != 0;
+        let unit: u32 = if ctrl & (1 << 26) != 0 { 4 } else { 2 };
+        let mut src = self.regs.get(0) & !(unit - 1);
+        let mut dst = self.regs.get(1) & !(unit - 1);
+        let mut value = 0u32;
+        for i in 0..count {
+            if !fill || i == 0 {
+                value = if unit == 4 {
+                    self.bus.read32(src)
+                } else {
+                    self.bus.read16(src) as u32
+                };
+                if !fill {
+                    src = src.wrapping_add(unit);
+                }
+            }
+            if unit == 4 {
+                self.bus.write32(dst, value);
+            } else {
+                self.bus.write16(dst, value as u16);
+            }
+            dst = dst.wrapping_add(unit);
+        }
+    }
+
+    /// CpuFastSet: 32-bit only, count rounded up to a multiple of 8 words.
+    fn cpu_fast_set(&mut self) {
+        let ctrl = self.regs.get(2);
+        let count = (ctrl & 0x1F_FFFF).div_ceil(8) * 8;
+        let fill = ctrl & (1 << 24) != 0;
+        let mut src = self.regs.get(0) & !3;
+        let mut dst = self.regs.get(1) & !3;
+        let mut value = 0u32;
+        for i in 0..count {
+            if !fill || i == 0 {
+                value = self.bus.read32(src);
+                if !fill {
+                    src = src.wrapping_add(4);
+                }
+            }
+            self.bus.write32(dst, value);
+            dst = dst.wrapping_add(4);
+        }
+    }
+
+    /// BitUnPack: widen src_w-bit fields to dst_w bits, adding `offset` to
+    /// non-zero values (and zero too if bit 31 of the info word says so).
+    fn bit_unpack(&mut self) {
+        let mut src = self.regs.get(0);
+        let mut dst = self.regs.get(1);
+        let info = self.regs.get(2);
+        let len = self.bus.read16(info) as u32;
+        let src_w = self.bus.read8(info.wrapping_add(2)) as u32;
+        let dst_w = self.bus.read8(info.wrapping_add(3)) as u32;
+        let off = self.bus.read32(info.wrapping_add(4));
+        let offset = off & 0x7FFF_FFFF;
+        let zero_too = off >> 31 != 0;
+        let mut out = 0u32;
+        let mut out_bits = 0u32;
+        for _ in 0..len {
+            let byte = self.bus.read8(src) as u32;
+            src = src.wrapping_add(1);
+            let mut bit = 0;
+            while bit < 8 {
+                let v = (byte >> bit) & ((1 << src_w) - 1);
+                let v = if v != 0 || zero_too { v.wrapping_add(offset) } else { v };
+                out |= v.wrapping_shl(out_bits);
+                out_bits += dst_w;
+                if out_bits >= 32 {
+                    self.bus.write32(dst, out);
+                    dst = dst.wrapping_add(4);
+                    out = 0;
+                    out_bits = 0;
+                }
+                bit += src_w;
+            }
+        }
     }
 
     fn wipe(&mut self, lo: u32, hi: u32) {
@@ -269,6 +355,59 @@ mod tests {
         assert_eq!(cpu.bus.read32(0x0300_0000), 0xDEAD_BEEF);
         assert_eq!(cpu.bus.read32(0x0300_7F00), 0xCAFE_F00D);
         assert_eq!(cpu.bus.read16(0x0400_0000), 0x0080); // forced blank
+    }
+
+    #[test]
+    fn cpu_set_halfword_copy_and_word_fill() {
+        let mut cpu = cpu_with(&[0xEF0B_0000]);
+        for i in 0..4u32 {
+            cpu.bus.write16(0x0200_0000 + i * 2, 0x1110 + i as u16);
+        }
+        cpu.regs.set(0, 0x0200_0000);
+        cpu.regs.set(1, 0x0200_1000);
+        cpu.regs.set(2, 4); // 4 halfwords, copy
+        cpu.step();
+        assert_eq!(cpu.bus.read16(0x0200_1000), 0x1110);
+        assert_eq!(cpu.bus.read16(0x0200_1006), 0x1113);
+        assert_eq!(cpu.bus.read16(0x0200_1008), 0);
+
+        let mut cpu = cpu_with(&[0xEF0B_0000]);
+        cpu.bus.write32(0x0200_0000, 0xAABB_CCDD);
+        cpu.regs.set(0, 0x0200_0000);
+        cpu.regs.set(1, 0x0200_2000);
+        cpu.regs.set(2, 3 | (1 << 24) | (1 << 26)); // 3 words, fill, 32-bit
+        cpu.step();
+        assert_eq!(cpu.bus.read32(0x0200_2008), 0xAABB_CCDD);
+        assert_eq!(cpu.bus.read32(0x0200_200C), 0);
+    }
+
+    #[test]
+    fn cpu_fast_set_rounds_up_to_eight_words() {
+        let mut cpu = cpu_with(&[0xEF0C_0000]);
+        cpu.bus.write32(0x0200_0000, 0x5555_AAAA);
+        cpu.regs.set(0, 0x0200_0000);
+        cpu.regs.set(1, 0x0200_1000);
+        cpu.regs.set(2, 1 | (1 << 24)); // 1 word requested -> 8 written
+        cpu.step();
+        assert_eq!(cpu.bus.read32(0x0200_101C), 0x5555_AAAA);
+        assert_eq!(cpu.bus.read32(0x0200_1020), 0);
+    }
+
+    #[test]
+    fn bit_unpack_expands_1bpp_to_4bpp() {
+        let mut cpu = cpu_with(&[0xEF10_0000]);
+        cpu.bus.write8(0x0200_0000, 0b1000_0001); // source byte
+        // info block: len=1, srcW=1, dstW=4, offset=1
+        cpu.bus.write16(0x0200_0100, 1);
+        cpu.bus.write8(0x0200_0102, 1);
+        cpu.bus.write8(0x0200_0103, 4);
+        cpu.bus.write32(0x0200_0104, 1);
+        cpu.regs.set(0, 0x0200_0000);
+        cpu.regs.set(1, 0x0200_1000);
+        cpu.regs.set(2, 0x0200_0100);
+        cpu.step();
+        // LSB-first: set bits become 1+1=2, clear bits stay 0 (no zero flag)
+        assert_eq!(cpu.bus.read32(0x0200_1000), 0x2000_0002);
     }
 
     #[test]
