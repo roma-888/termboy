@@ -148,6 +148,28 @@ impl Bus {
         self.write8_raw(addr + 3, d);
     }
 
+    pub(crate) fn io16(&self, reg: usize) -> u16 {
+        u16::from_le_bytes([self.io[reg], self.io[reg + 1]])
+    }
+
+    pub(crate) fn io32(&self, reg: usize) -> u32 {
+        u32::from_le_bytes([
+            self.io[reg],
+            self.io[reg + 1],
+            self.io[reg + 2],
+            self.io[reg + 3],
+        ])
+    }
+
+    pub(crate) fn oam16(&self, i: usize) -> u16 {
+        u16::from_le_bytes([self.oam[i], self.oam[i + 1]])
+    }
+
+    /// Palette entry as BGR555 (index 0-255 = BG palette, 256-511 = OBJ).
+    pub(crate) fn palette16(&self, index: usize) -> u16 {
+        u16::from_le_bytes([self.palette[index * 2], self.palette[index * 2 + 1]])
+    }
+
     /// Raise IF bits the way hardware peripherals do (G4 wires real sources).
     pub fn raise_irq(&mut self, bits: u16) {
         let cur = u16::from_le_bytes([self.io[0x202], self.io[0x203]]);
