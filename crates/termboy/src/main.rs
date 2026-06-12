@@ -16,8 +16,52 @@ use crossterm::event::{
     PushKeyboardEnhancementFlags,
 };
 use crossterm::{cursor, execute, terminal};
-use termboy_core::{Buttons, Core};
-use termboy_gb::GameBoy;
+use termboy_core::{Buttons, Core, Rgb};
+use termboy_gb::{DMG_GREEN, GameBoy};
+
+const USAGE: &str = "\
+usage: termboy [options] <rom.gb>
+
+options:
+  --palette <name>   green (default), gray, pocket, or four hex colors
+                     lightest-to-darkest: '#e0f8d0,#88c070,#346856,#081820'
+  --exact            require a 160x72 terminal instead of auto-scaling
+  --headless         run without UI, print serial output (debug tool)
+  -h, --help         show this help
+
+controls: arrows = D-pad, X = A, Z = B, Enter = Start, Tab = Select, Esc = quit";
+
+fn parse_palette(name: &str) -> Option<[Rgb; 4]> {
+    match name {
+        "green" => Some(DMG_GREEN),
+        "gray" | "grey" => Some([
+            Rgb(0xFF, 0xFF, 0xFF),
+            Rgb(0xAA, 0xAA, 0xAA),
+            Rgb(0x55, 0x55, 0x55),
+            Rgb(0x00, 0x00, 0x00),
+        ]),
+        "pocket" => Some([
+            Rgb(0xE0, 0xDB, 0xCD),
+            Rgb(0xA8, 0x9F, 0x94),
+            Rgb(0x70, 0x6B, 0x66),
+            Rgb(0x2B, 0x28, 0x26),
+        ]),
+        custom => {
+            let mut out = [Rgb(0, 0, 0); 4];
+            let mut n = 0;
+            for part in custom.split(',') {
+                let hex = part.trim().strip_prefix('#')?;
+                if hex.len() != 6 || n == 4 {
+                    return None;
+                }
+                let v = u32::from_str_radix(hex, 16).ok()?;
+                out[n] = Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
+                n += 1;
+            }
+            (n == 4).then_some(out)
+        }
+    }
+}
 
 fn sav_path(rom_path: &str) -> PathBuf {
     Path::new(rom_path).with_extension("sav")
@@ -44,6 +88,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn named_palettes_parse() {
+        assert_eq!(parse_palette("green"), Some(DMG_GREEN));
+        assert!(parse_palette("gray").is_some());
+        assert!(parse_palette("pocket").is_some());
+        assert!(parse_palette("sepia").is_none());
+    }
+
+    #[test]
+    fn custom_hex_palette_parses() {
+        let p = parse_palette("#e0f8d0,#88c070,#346856,#081820").unwrap();
+        assert_eq!(p[0], Rgb(0xE0, 0xF8, 0xD0));
+        assert_eq!(p[3], Rgb(0x08, 0x18, 0x20));
+        assert!(parse_palette("#e0f8d0,#88c070").is_none()); // needs 4
+        assert!(parse_palette("#xyz,#88c070,#346856,#081820").is_none());
+    }
+
+    #[test]
     fn sav_path_replaces_extension() {
         assert_eq!(sav_path("roms/tetris.gb"), PathBuf::from("roms/tetris.sav"));
         assert_eq!(sav_path("pokemon.red.gb"), PathBuf::from("pokemon.red.sav"));
@@ -66,10 +127,41 @@ const FRAME_TIME: Duration = Duration::from_nanos(70_224 * 1_000_000_000 / 4_194
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     let headless = args.iter().any(|a| a == "--headless");
     let exact = args.iter().any(|a| a == "--exact");
-    let Some(path) = args.iter().find(|a| !a.starts_with("--")) else {
-        eprintln!("usage: termboy [--headless] [--exact] <rom.gb>");
+    let mut palette = DMG_GREEN;
+    let mut rom_arg: Option<&str> = None;
+    let mut it = args.iter().peekable();
+    while let Some(arg) = it.next() {
+        let name = if let Some(n) = arg.strip_prefix("--palette=") {
+            Some(n.to_string())
+        } else if arg == "--palette" {
+            it.next().cloned()
+        } else {
+            if !arg.starts_with('-') {
+                rom_arg = Some(arg);
+            }
+            None
+        };
+        if let Some(name) = name {
+            match parse_palette(&name) {
+                Some(p) => palette = p,
+                None => {
+                    eprintln!(
+                        "error: unknown palette {name:?} — try green, gray, pocket, \
+                         or four hex colors like '#e0f8d0,#88c070,#346856,#081820'"
+                    );
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    }
+    let Some(path) = rom_arg else {
+        eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
     let rom = match std::fs::read(path) {
@@ -86,6 +178,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    gb.set_palette(palette);
     let sav = sav_path(path);
     if let Ok(data) = std::fs::read(&sav) {
         gb.load_ram(&data);

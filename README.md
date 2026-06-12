@@ -2,6 +2,8 @@
 
 A Game Boy emulator that runs in your terminal.
 
+![dmg-acid2 rendered by termboy](assets/dmg-acid2.png)
+
 Written in Rust. Targets the original Game Boy (DMG) first, with an architecture ready for Game Boy Color support.
 
 ## Status
@@ -12,6 +14,7 @@ Pokémon Red are playable with persistent saves. Blargg cpu_instrs (individual
 + combined) + instr_timing and dmg-acid2 (pixel-exact) all pass.
 
 - `cargo run --release -p termboy -- <rom.gb>` — play a ROM in any truecolor terminal (pixel-perfect at 160x72+, auto-scaled to fit below that; `--exact` disables scaling)
+- `--palette green|gray|pocket` or four hex colors (`--palette '#e0f8d0,#88c070,#346856,#081820'`)
 - `cargo run --release -p termboy -- --headless <rom.gb>` — run headless, print serial output
 - `cargo test --workspace` — full test suite including hardware test ROMs
 
