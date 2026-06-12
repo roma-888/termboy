@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/termboy-core", "crates/termboy-gb", "crates/termboy"]
+members = ["crates/termboy-core", "crates/termboy-gb", "crates/termboy-gba", "crates/termboy"]
 
 [workspace.package]
 edition = "2024"
