@@ -131,7 +131,7 @@ fn draw(roms: &[Entry], selected: usize) {
     };
 
     let green = Kind::Dmg.color();
-    let mut out = String::from("\x1b[2J\x1b[H\x1b[0m");
+    let mut out = String::from("\x1b[0m\x1b[2J\x1b[H");
     out.push_str(&format!(
         "  {green}▄▀▄▀▄{RESET} {BOLD}T E R M B O Y{RESET} {green}▄▀▄▀▄{RESET}\r\n"
     ));

@@ -239,7 +239,7 @@ fn run_menu(
         };
         if roms[i].kind == menu::Kind::Advance {
             print!(
-                "\x1b[2J\x1b[H\x1b[0m  Game Boy Advance support is on the roadmap — \
+                "\x1b[0m\x1b[2J\x1b[H  Game Boy Advance support is on the roadmap — \
                  this one will work eventually!\r\n\r\n  press any key"
             );
             use std::io::Write as _;
@@ -252,13 +252,13 @@ fn run_menu(
             Ok((gb, sav)) => {
                 let mut input = input::Input::new(guard.enhanced, keymap.clone());
                 let mut screen = screen::Screen::new(160, 144);
-                print!("\x1b[2J");
+                print!("\x1b[0m\x1b[2J");
                 run_game(gb, exact, &sav, &mut input, &mut screen, &audio);
                 // Esc in-game returns here: back to the picker.
             }
             Err(msg) => {
                 // show the error in the picker session briefly
-                print!("\x1b[2J\x1b[H\x1b[0merror: {msg}\r\n\r\npress any key");
+                print!("\x1b[0m\x1b[2J\x1b[Herror: {msg}\r\n\r\npress any key");
                 use std::io::Write as _;
                 std::io::stdout().flush().ok();
                 let _ = event::read();
@@ -400,7 +400,7 @@ fn run_game(
         };
         if too_small {
             out.clear();
-            out.push_str("\x1b[2J\x1b[H\x1b[0m");
+            out.push_str("\x1b[0m\x1b[2J\x1b[H");
             let (nc, nr) = if exact { (need_cols, need_rows) } else { (16, 8) };
             out.push_str(&format!(
                 "termboy needs a {nc}x{nr} terminal (yours: {cols}x{rows}). Resize, or press Esc to quit."
@@ -417,7 +417,7 @@ fn run_game(
             last_size = (cols, rows);
             screen.set_viewport(cols as usize, rows as usize);
             screen.invalidate();
-            print!("\x1b[2J"); // clear leftovers outside the (re)centered image
+            print!("\x1b[0m\x1b[2J"); // clear leftovers outside the (re)centered image
             std::io::stdout().flush().ok();
         }
 
