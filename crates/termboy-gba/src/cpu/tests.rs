@@ -118,11 +118,97 @@ fn bx_switches_to_thumb_and_back() {
 }
 
 #[test]
-#[ignore = "thumb lands in task 12"]
 fn pc_reads_as_plus_4_in_thumb() {
     let mut cpu = thumb_cpu_with(&[0x4678]); // MOV r0, pc (hi-reg MOV)
     cpu.step();
     assert_eq!(cpu.regs.get(0), 0x0800_0004);
+}
+
+#[test]
+fn thumb_shift_immediate_sets_flags() {
+    let mut cpu = thumb_cpu_with(&[0x0108]); // LSL r0, r1, #4
+    cpu.regs.set(1, 0x1800_0001);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x8000_0010);
+    assert!(cpu.regs.cpsr.flag(N) && cpu.regs.cpsr.flag(C)); // bit 28 out last
+}
+
+#[test]
+fn thumb_add_sub_register_and_imm3() {
+    // ADD r0, r1, r2 ; SUB r0, r1, #2
+    let mut cpu = thumb_cpu_with(&[0x1888, 0x1E88]);
+    cpu.regs.set(1, 10);
+    cpu.regs.set(2, 5);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 15);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 8);
+    assert!(cpu.regs.cpsr.flag(C)); // 10-2: no borrow
+}
+
+#[test]
+fn thumb_mov_cmp_add_sub_imm8() {
+    // MOV r0,#42 ; CMP r0,#42 ; ADD r0,#1 ; SUB r0,#1
+    let mut cpu = thumb_cpu_with(&[0x202A, 0x282A, 0x3001, 0x3801]);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 42);
+    cpu.step();
+    assert!(cpu.regs.cpsr.flag(Z) && cpu.regs.cpsr.flag(C));
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 43);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 42);
+}
+
+#[test]
+fn thumb_alu_register_ops() {
+    // ADC r0,r1 ; NEG r0,r1 ; MUL r0,r1 ; ROR r0,r1
+    let mut cpu = thumb_cpu_with(&[0x4148, 0x4248, 0x4348, 0x41C8]);
+    cpu.regs.cpsr.set_flag(C, true);
+    cpu.regs.set(0, 1);
+    cpu.regs.set(1, 2);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 4); // 1 + 2 + C
+    cpu.step();
+    assert_eq!(cpu.regs.get(0) as i32, -2); // NEG = 0 - r1
+    cpu.step();
+    assert_eq!(cpu.regs.get(0) as i32, -4); // -2 * 2
+    cpu.regs.set(0, 1);
+    cpu.regs.set(1, 1);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x8000_0000); // ROR by 1
+    assert!(cpu.regs.cpsr.flag(C) && cpu.regs.cpsr.flag(N));
+}
+
+#[test]
+fn thumb_hi_register_ops_dont_set_flags() {
+    // ADD r0, r8 ; MOV r8, r0
+    let mut cpu = thumb_cpu_with(&[0x4440, 0x4680]);
+    cpu.regs.cpsr.set_flag(Z, true);
+    cpu.regs.set(0, 0xFFFF_FFFF);
+    cpu.regs.set(8, 1);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0);
+    assert!(cpu.regs.cpsr.flag(Z)); // unchanged, not recomputed
+    cpu.step();
+    assert_eq!(cpu.regs.get(8), 0);
+}
+
+#[test]
+fn thumb_bx_back_to_arm() {
+    let mut cpu = thumb_cpu_with(&[0x4708]); // BX r1
+    cpu.regs.set(1, 0x0800_0040); // even -> ARM
+    cpu.step();
+    assert!(!cpu.regs.cpsr.thumb());
+    assert_eq!(cpu.exec_addr(), 0x0800_0040);
+}
+
+#[test]
+fn thumb_pc_relative_load_word_aligns() {
+    // at 0x08000000: LDR r0, [pc, #4] -> (0x08000004 & !2) + 4 = 0x08000008
+    let mut cpu = thumb_cpu_with(&[0x4801, 0, 0, 0, 0x5544, 0x7766]);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x7766_5544);
 }
 
 #[test]
