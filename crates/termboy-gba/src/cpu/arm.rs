@@ -76,8 +76,77 @@ impl Cpu {
     fn arm_msr(&mut self, op: u32) {
         self.todo(op)
     }
+    /// Decode operand 2: rotated immediate, or rm shifted by imm/register.
+    /// Returns (value, shifter carry-out).
+    fn arm_operand2(&mut self, op: u32) -> (u32, bool) {
+        if op & (1 << 25) != 0 {
+            let rot = (op >> 8) & 0xF;
+            let imm = op & 0xFF;
+            if rot == 0 {
+                (imm, self.regs.cpsr.flag(super::psr::C))
+            } else {
+                let v = imm.rotate_right(rot * 2);
+                (v, v >> 31 != 0)
+            }
+        } else {
+            let rm = (op & 0xF) as usize;
+            let ty = (op >> 5) & 3;
+            if op & (1 << 4) != 0 {
+                // register-specified shift: one internal cycle, r15 reads +12
+                let amount = self.regs.get(((op >> 8) & 0xF) as usize) & 0xFF;
+                let value = self.regs.get(rm).wrapping_add(if rm == 15 { 4 } else { 0 });
+                self.bus.idle();
+                self.shift(ty, value, amount, false)
+            } else {
+                let amount = (op >> 7) & 0x1F;
+                let value = self.regs.get(rm);
+                self.shift(ty, value, amount, true)
+            }
+        }
+    }
+
     fn arm_data_processing(&mut self, op: u32) {
-        self.todo(op)
+        use super::psr::C;
+        let opcode = (op >> 21) & 0xF;
+        let s = op & (1 << 20) != 0;
+        let rd = ((op >> 12) & 0xF) as usize;
+        let reg_shift = op & (1 << 25) == 0 && op & (1 << 4) != 0;
+        let (op2, shifter_carry) = self.arm_operand2(op);
+        let rn_i = ((op >> 16) & 0xF) as usize;
+        let rn = self.regs.get(rn_i).wrapping_add(if rn_i == 15 && reg_shift { 4 } else { 0 });
+        let c = self.regs.cpsr.flag(C) as u32;
+        // S with rd=15 means "restore CPSR from SPSR", not "compute flags"
+        let set_flags = s && rd != 15;
+        let result = match opcode {
+            0x0 => { let r = rn & op2; if set_flags { self.set_nzc(r, shifter_carry) } r } // AND
+            0x1 => { let r = rn ^ op2; if set_flags { self.set_nzc(r, shifter_carry) } r } // EOR
+            0x2 => self.sub_flags(rn, op2, 1, set_flags),                                  // SUB
+            0x3 => self.sub_flags(op2, rn, 1, set_flags),                                  // RSB
+            0x4 => self.add_flags(rn, op2, 0, set_flags),                                  // ADD
+            0x5 => self.add_flags(rn, op2, c, set_flags),                                  // ADC
+            0x6 => self.sub_flags(rn, op2, c, set_flags),                                  // SBC
+            0x7 => self.sub_flags(op2, rn, c, set_flags),                                  // RSC
+            0x8 => { let r = rn & op2; self.set_nzc(r, shifter_carry); r }                 // TST
+            0x9 => { let r = rn ^ op2; self.set_nzc(r, shifter_carry); r }                 // TEQ
+            0xA => self.sub_flags(rn, op2, 1, true),                                       // CMP
+            0xB => self.add_flags(rn, op2, 0, true),                                       // CMN
+            0xC => { let r = rn | op2; if set_flags { self.set_nzc(r, shifter_carry) } r } // ORR
+            0xD => { if set_flags { self.set_nzc(op2, shifter_carry) } op2 }               // MOV
+            0xE => { let r = rn & !op2; if set_flags { self.set_nzc(r, shifter_carry) } r } // BIC
+            _ => { let r = !op2; if set_flags { self.set_nzc(r, shifter_carry) } r }       // MVN
+        };
+        if !(0x8..=0xB).contains(&opcode) {
+            if rd == 15 {
+                if s {
+                    let spsr = self.regs.spsr();
+                    self.regs.write_cpsr(spsr);
+                }
+                self.regs.set(15, result);
+                self.flush();
+            } else {
+                self.regs.set(rd, result);
+            }
+        }
     }
     fn arm_single_transfer(&mut self, op: u32) {
         self.todo(op)

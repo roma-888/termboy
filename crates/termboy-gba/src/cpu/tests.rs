@@ -32,7 +32,6 @@ fn boots_at_cartridge_entry_in_system_mode() {
 }
 
 #[test]
-#[ignore = "data processing lands in task 6"]
 fn pc_reads_as_plus_8_in_arm() {
     let mut cpu = cpu_with(&[0xE1A0_000F]); // MOV r0, r15
     cpu.step();
@@ -41,7 +40,6 @@ fn pc_reads_as_plus_8_in_arm() {
 }
 
 #[test]
-#[ignore = "data processing lands in task 6"]
 fn condition_codes_gate_execution() {
     // MOVEQ r0,#1 ; MOVNE r1,#1  (Z is clear after reset)
     let mut cpu = cpu_with(&[0x03A0_0001, 0x13A0_1001]);
@@ -125,4 +123,124 @@ fn pc_reads_as_plus_4_in_thumb() {
     let mut cpu = thumb_cpu_with(&[0x4678]); // MOV r0, pc (hi-reg MOV)
     cpu.step();
     assert_eq!(cpu.regs.get(0), 0x0800_0004);
+}
+
+#[test]
+fn adds_sets_carry_and_overflow() {
+    let mut cpu = cpu_with(&[0xE091_0002]); // ADDS r0, r1, r2
+    cpu.regs.set(1, 0x7FFF_FFFF);
+    cpu.regs.set(2, 1);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x8000_0000);
+    assert!(cpu.regs.cpsr.flag(N) && cpu.regs.cpsr.flag(V));
+    assert!(!cpu.regs.cpsr.flag(C) && !cpu.regs.cpsr.flag(Z));
+}
+
+#[test]
+fn subs_carry_means_no_borrow() {
+    let mut cpu = cpu_with(&[0xE051_0002, 0xE051_0002]); // SUBS r0, r1, r2 (x2)
+    cpu.regs.set(1, 5);
+    cpu.regs.set(2, 5);
+    cpu.step();
+    assert!(cpu.regs.cpsr.flag(Z) && cpu.regs.cpsr.flag(C)); // 5-5: no borrow
+    cpu.regs.set(1, 0);
+    cpu.regs.set(2, 1);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0xFFFF_FFFF);
+    assert!(!cpu.regs.cpsr.flag(C)); // borrow -> C clear
+}
+
+#[test]
+fn adc_sbc_use_carry() {
+    // ADCS r0, r1, r2 ; SBCS r3, r4, r5
+    let mut cpu = cpu_with(&[0xE0B1_0002, 0xE0D4_3005]);
+    cpu.regs.cpsr.set_flag(C, true);
+    cpu.regs.set(1, 1);
+    cpu.regs.set(2, 2);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 4); // 1 + 2 + C
+    // after ADCS of small numbers C is clear -> SBC subtracts an extra 1
+    cpu.regs.set(4, 10);
+    cpu.regs.set(5, 3);
+    cpu.step();
+    assert_eq!(cpu.regs.get(3), 6); // 10 - 3 - 1
+}
+
+#[test]
+fn logical_ops_take_carry_from_shifter() {
+    let mut cpu = cpu_with(&[0xE1B0_0081]); // MOVS r0, r1, LSL #1
+    cpu.regs.set(1, 0x8000_0001);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 2);
+    assert!(cpu.regs.cpsr.flag(C)); // bit 31 shifted out
+    assert!(!cpu.regs.cpsr.flag(Z) && !cpu.regs.cpsr.flag(N));
+}
+
+#[test]
+fn lsr_zero_immediate_means_lsr_32() {
+    let mut cpu = cpu_with(&[0xE1B0_0021]); // MOVS r0, r1, LSR #0
+    cpu.regs.set(1, 0x8000_0000);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0);
+    assert!(cpu.regs.cpsr.flag(C) && cpu.regs.cpsr.flag(Z));
+}
+
+#[test]
+fn ror_zero_immediate_is_rrx() {
+    let mut cpu = cpu_with(&[0xE1B0_0061]); // MOVS r0, r1, ROR #0
+    cpu.regs.cpsr.set_flag(C, true);
+    cpu.regs.set(1, 1);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x8000_0000); // carry rotated into bit 31
+    assert!(cpu.regs.cpsr.flag(C)); // old bit 0 out
+}
+
+#[test]
+fn register_shift_by_32_and_more() {
+    // MOVS r0, r1, LSL r2 ; MOVS r0, r1, LSL r2
+    let mut cpu = cpu_with(&[0xE1B0_0211, 0xE1B0_0211]);
+    cpu.regs.set(1, 1);
+    cpu.regs.set(2, 32);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0);
+    assert!(cpu.regs.cpsr.flag(C)); // LSL #32: C = old bit 0
+    cpu.regs.set(2, 33);
+    cpu.step();
+    assert!(!cpu.regs.cpsr.flag(C)); // LSL >32: result 0, C 0
+}
+
+#[test]
+fn register_shift_reads_pc_plus_12() {
+    let mut cpu = cpu_with(&[0xE1A0_021F]); // MOV r0, r15, LSL r2
+    cpu.regs.set(2, 0);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x0800_000C); // PC+12, not PC+8
+}
+
+#[test]
+fn immediate_operand_with_rotation() {
+    let mut cpu = cpu_with(&[0xE3A0_04FF]); // MOV r0, #0xFF000000 (0xFF ror 8)
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0xFF00_0000);
+}
+
+#[test]
+fn cmp_tst_only_set_flags() {
+    // CMP r1, r2 ; TST r1, r3
+    let mut cpu = cpu_with(&[0xE151_0002, 0xE111_0003]);
+    cpu.regs.set(1, 7);
+    cpu.regs.set(2, 7);
+    cpu.regs.set(3, 8);
+    cpu.step();
+    assert!(cpu.regs.cpsr.flag(Z) && cpu.regs.cpsr.flag(C));
+    cpu.step();
+    assert!(cpu.regs.cpsr.flag(Z)); // 7 & 8 == 0
+    assert_eq!(cpu.regs.get(0), 0); // nothing written
+}
+
+#[test]
+fn mov_to_pc_branches() {
+    let mut cpu = cpu_with(&[0xE3A0_F00C]); // MOV pc, #12
+    cpu.step();
+    assert_eq!(cpu.exec_addr(), 0x0000_000C); // absolute (BIOS region)
 }

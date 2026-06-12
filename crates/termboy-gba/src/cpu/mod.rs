@@ -126,6 +126,87 @@ impl Cpu {
         self.exception(0x18, Mode::Irq, lr);
     }
 
+    pub(crate) fn set_nz(&mut self, result: u32) {
+        self.regs.cpsr.set_flag(psr::N, result >> 31 != 0);
+        self.regs.cpsr.set_flag(psr::Z, result == 0);
+    }
+
+    pub(crate) fn set_nzc(&mut self, result: u32, carry: bool) {
+        self.set_nz(result);
+        self.regs.cpsr.set_flag(psr::C, carry);
+    }
+
+    /// a + b + carry_in, optionally setting NZCV.
+    pub(crate) fn add_flags(&mut self, a: u32, b: u32, carry_in: u32, s: bool) -> u32 {
+        let result = a.wrapping_add(b).wrapping_add(carry_in);
+        if s {
+            self.set_nz(result);
+            let c = (a as u64) + (b as u64) + (carry_in as u64) > 0xFFFF_FFFF;
+            self.regs.cpsr.set_flag(psr::C, c);
+            self.regs.cpsr.set_flag(psr::V, ((a ^ result) & (b ^ result)) >> 31 != 0);
+        }
+        result
+    }
+
+    /// a - b - !carry_in. SUB/CMP pass carry_in=1, SBC passes the C flag.
+    /// (Computed as a + !b + carry_in, which yields the right C and V.)
+    pub(crate) fn sub_flags(&mut self, a: u32, b: u32, carry_in: u32, s: bool) -> u32 {
+        self.add_flags(a, !b, carry_in, s)
+    }
+
+    /// Barrel shifter. `imm` = the amount came from an immediate field
+    /// (amount 0 then has the special meanings). Returns (result, carry-out).
+    /// Does NOT touch flags — callers decide (memory offsets never do).
+    pub(crate) fn shift(&mut self, ty: u32, value: u32, amount: u32, imm: bool) -> (u32, bool) {
+        let cin = self.regs.cpsr.flag(psr::C);
+        match ty {
+            0 => match amount {
+                // LSL
+                0 => (value, cin),
+                1..=31 => (value << amount, (value >> (32 - amount)) & 1 != 0),
+                32 => (0, value & 1 != 0),
+                _ => (0, false),
+            },
+            1 => {
+                // LSR (imm 0 = 32)
+                let amount = if imm && amount == 0 { 32 } else { amount };
+                match amount {
+                    0 => (value, cin),
+                    1..=31 => (value >> amount, (value >> (amount - 1)) & 1 != 0),
+                    32 => (0, value >> 31 != 0),
+                    _ => (0, false),
+                }
+            }
+            2 => {
+                // ASR (imm 0 = 32; >=32 saturates to the sign bit)
+                let amount = if imm && amount == 0 { 32 } else { amount };
+                match amount {
+                    0 => (value, cin),
+                    1..=31 => {
+                        (((value as i32) >> amount) as u32, (value >> (amount - 1)) & 1 != 0)
+                    }
+                    _ => {
+                        let r = ((value as i32) >> 31) as u32;
+                        (r, r & 1 != 0)
+                    }
+                }
+            }
+            _ => {
+                // ROR (imm 0 = RRX)
+                if imm && amount == 0 {
+                    ((value >> 1) | ((cin as u32) << 31), value & 1 != 0)
+                } else if amount == 0 {
+                    (value, cin)
+                } else if amount & 31 == 0 {
+                    (value, value >> 31 != 0)
+                } else {
+                    let amount = amount & 31;
+                    (value.rotate_right(amount), (value >> (amount - 1)) & 1 != 0)
+                }
+            }
+        }
+    }
+
     // exec_thumb lives in thumb.rs (Task 12); stub so the step loop compiles:
     pub(crate) fn exec_thumb(&mut self, op: u16) {
         unimplemented!("thumb opcode {op:#06X} at {:#010X}", self.exec_addr())
