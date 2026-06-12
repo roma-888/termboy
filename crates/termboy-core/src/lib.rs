@@ -42,6 +42,11 @@ pub trait Core {
     /// (owned: cores may append metadata such as RTC time at save time).
     fn save_ram(&self) -> Option<Vec<u8>>;
     fn load_ram(&mut self, data: &[u8]);
+    /// Move any pending stereo audio samples into `out`. Cores without
+    /// audio (or with it disabled) may leave this as the default no-op.
+    fn drain_audio(&mut self, out: &mut Vec<(f32, f32)>) {
+        let _ = out;
+    }
 }
 
 #[cfg(test)]

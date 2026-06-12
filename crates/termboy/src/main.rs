@@ -3,6 +3,7 @@
 //! when it isn't (`--exact` disables downscaling).
 //! `--headless` runs without UI and streams serial output (debug tool).
 
+mod audio;
 mod input;
 mod menu;
 mod screen;
@@ -231,6 +232,7 @@ fn run_menu(
             return ExitCode::FAILURE;
         }
     };
+    let audio = audio::Audio::new();
     loop {
         let Some(i) = menu::pick(&roms) else {
             return ExitCode::SUCCESS;
@@ -241,7 +243,7 @@ fn run_menu(
                 let mut input = input::Input::new(guard.enhanced, keymap.clone());
                 let mut screen = screen::Screen::new(160, 144);
                 print!("\x1b[2J");
-                run_game(gb, exact, &sav, &mut input, &mut screen);
+                run_game(gb, exact, &sav, &mut input, &mut screen, &audio);
                 // Esc in-game returns here: back to the picker.
             }
             Err(msg) => {
@@ -343,7 +345,8 @@ fn run_terminal(
     };
     let mut input = input::Input::new(guard.enhanced, keymap);
     let mut screen = screen::Screen::new(160, 144);
-    run_game(gb, exact, sav, &mut input, &mut screen)
+    let audio = audio::Audio::new();
+    run_game(gb, exact, sav, &mut input, &mut screen, &audio)
 }
 
 /// Run one game until Esc. Assumes raw mode + alternate screen are active.
@@ -353,7 +356,10 @@ fn run_game(
     sav: &Path,
     input: &mut input::Input,
     screen: &mut screen::Screen,
+    audio: &audio::Audio,
 ) -> ExitCode {
+    gb.set_audio_rate(audio.sample_rate);
+    let mut audio_buf: Vec<(f32, f32)> = Vec::new();
     let (need_cols, need_rows) = screen.required_size();
     let mut last_size = (0u16, 0u16);
     screen.invalidate();
@@ -408,6 +414,8 @@ fn run_game(
         let fb = gb.run_frame(input.buttons(Instant::now()));
         out.clear();
         screen.render(fb, &mut out);
+        gb.drain_audio(&mut audio_buf);
+        audio.push(&mut audio_buf);
         if !out.is_empty() {
             print!("{out}");
             std::io::stdout().flush().ok();

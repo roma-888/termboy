@@ -7,3 +7,4 @@ edition.workspace = true
 termboy-core = { path = "../termboy-core" }
 termboy-gb = { path = "../termboy-gb" }
 crossterm = "0.29"
+cpal = "0.16"

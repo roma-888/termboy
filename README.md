@@ -8,9 +8,9 @@ Written in Rust. Targets the original Game Boy (DMG) first, with an architecture
 
 ## Status
 
-Game Boy Color support is in: GBC games run in full color (banked VRAM/WRAM,
-color palettes, double-speed CPU, HDMA, MBC5) alongside the original DMG
-library. MBC1/MBC3/MBC5 with battery saves (`<rom>.sav`, auto-flushed) and the
+Full audio (all four APU channels) plays through your system output. Game
+Boy Color games run in full color (banked VRAM/WRAM, color palettes,
+double-speed CPU, HDMA, MBC5) alongside the original DMG library. MBC1/MBC3/MBC5 with battery saves (`<rom>.sav`, auto-flushed) and the
 MBC3 real-time clock. Blargg cpu_instrs + instr_timing, dmg-acid2 AND
 cgb-acid2 (both pixel-exact vs official references) all pass.
 

@@ -2,6 +2,7 @@
 //! M-cycle (4 T-cycles); the CPU calls it once per memory access, which is
 //! what keeps all components in hardware-true lockstep (design spec §3).
 
+use crate::apu::Apu;
 use crate::cartridge::Cartridge;
 use crate::joypad::Joypad;
 use crate::ppu::Ppu;
@@ -27,6 +28,7 @@ pub struct Bus {
     pub timer: Timer,
     pub serial: Serial,
     pub joypad: Joypad,
+    pub apu: Apu,
     /// IF (0xFF0F) and IE (0xFFFF)
     pub intf: u8,
     pub inte: u8,
@@ -56,6 +58,7 @@ impl Bus {
             timer: Timer::default(),
             serial: Serial::default(),
             joypad: Joypad::default(),
+            apu: Apu::new(),
             intf: 0,
             inte: 0,
             cycles: 0,
@@ -101,6 +104,7 @@ impl Bus {
         for _ in 0..ppu_t {
             self.intf |= self.ppu.tick();
         }
+        self.apu.tick(ppu_t); // APU runs in real time, like the PPU
         self.cart.tick(ppu_t);
         // OAM DMA: one byte per M-cycle, 160 M-cycles total.
         if self.dma_idx < 0xA0 {
@@ -178,6 +182,7 @@ impl Bus {
             0xFF06 => self.timer.tma,
             0xFF07 => self.timer.read_tac(),
             0xFF0F => self.intf | 0xE0,
+            0xFF10..=0xFF3F => self.apu.read(addr),
             0xFF40 => self.ppu.lcdc,
             0xFF41 => self.ppu.read_stat(),
             0xFF42 => self.ppu.scy,
@@ -214,6 +219,7 @@ impl Bus {
             0xFF06 => self.timer.tma = value,
             0xFF07 => self.timer.write_tac(value),
             0xFF0F => self.intf = value & 0x1F,
+            0xFF10..=0xFF3F => self.apu.write(addr, value),
             0xFF40 => self.ppu.write_lcdc(value),
             0xFF41 => self.ppu.write_stat(value),
             0xFF42 => self.ppu.scy = value,
@@ -266,7 +272,8 @@ impl Bus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cartridge::Cartridge;
+    use crate::apu::Apu;
+use crate::cartridge::Cartridge;
 use crate::joypad::Joypad;
 
     fn bus() -> Bus {

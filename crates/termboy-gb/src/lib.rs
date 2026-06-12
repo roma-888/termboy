@@ -1,3 +1,4 @@
+pub mod apu;
 pub mod bus;
 pub mod cartridge;
 pub mod joypad;
@@ -87,6 +88,11 @@ impl GameBoy {
     pub fn cycles(&self) -> u64 {
         self.cpu.bus.cycles
     }
+
+    /// Host audio sample rate (Hz). Default 48000.
+    pub fn set_audio_rate(&mut self, hz: u32) {
+        self.cpu.bus.apu.set_sample_rate(hz);
+    }
 }
 
 impl Core for GameBoy {
@@ -117,6 +123,10 @@ impl Core for GameBoy {
 
     fn load_ram(&mut self, data: &[u8]) {
         self.cpu.bus.cart.load(data, unix_now());
+    }
+
+    fn drain_audio(&mut self, out: &mut Vec<(f32, f32)>) {
+        out.append(&mut self.cpu.bus.apu.samples);
     }
 }
 
