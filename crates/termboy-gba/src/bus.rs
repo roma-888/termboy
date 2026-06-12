@@ -103,7 +103,16 @@ impl Bus {
 
     pub fn write8(&mut self, addr: u32, value: u8) {
         self.cycles += 1;
-        self.write8_raw(addr, value);
+        match addr >> 24 {
+            // 16-bit video memories: byte stores write both halves...
+            0x05 | 0x06 => {
+                self.write8_raw(addr & !1, value);
+                self.write8_raw(addr | 1, value);
+            }
+            // ...and byte stores to OAM do nothing at all.
+            0x07 => {}
+            _ => self.write8_raw(addr, value),
+        }
     }
 
     fn write8_raw(&mut self, addr: u32, value: u8) {
@@ -257,6 +266,26 @@ mod tests {
         b.write16(0x0400_0202, 0x0001); // write-1-to-acknowledge clears bit 0
         assert_eq!(b.read16(0x0400_0202), 0x0004);
         assert_eq!(b.read16(0x0400_0130), 0x03FF); // KEYINPUT: nothing pressed
+    }
+
+    #[test]
+    fn byte_writes_to_palette_and_vram_duplicate_into_halfword() {
+        let mut b = bus();
+        b.write8(0x0500_0002, 0x4A);
+        assert_eq!(b.read16(0x0500_0002), 0x4A4A);
+        b.write8(0x0600_0001, 0x7C); // odd address: same halfword
+        assert_eq!(b.read16(0x0600_0000), 0x7C7C);
+    }
+
+    #[test]
+    fn byte_writes_to_oam_are_ignored_and_16bit_writes_are_not_duplicated() {
+        let mut b = bus();
+        b.write8(0x0700_0000, 0xFF);
+        assert_eq!(b.read16(0x0700_0000), 0x0000);
+        b.write16(0x0500_0000, 0x1234); // must store 0x34, 0x12 — no quirk
+        assert_eq!(b.read16(0x0500_0000), 0x1234);
+        b.write32(0x0601_0000, 0xAABB_CCDD);
+        assert_eq!(b.read32(0x0601_0000), 0xAABB_CCDD);
     }
 
     #[test]
