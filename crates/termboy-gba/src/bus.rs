@@ -1,21 +1,22 @@
 //! GBA memory map at coarse timing: every access is one cycle (real
 //! waitstates land in G7). The CPU is the only bus master until DMA (G4).
 
-const CYCLES_PER_LINE: u64 = 1232;
-const LINES: u64 = 228;
+pub(crate) const CYCLES_PER_LINE: u64 = 1232;
+pub(crate) const LINES: u64 = 228;
 const VBLANK_START: u64 = 160;
 
 pub struct Bus {
     pub rom: Vec<u8>,
     ewram: Box<[u8; 0x4_0000]>,
     iwram: Box<[u8; 0x8000]>,
-    io: Box<[u8; 0x400]>,
+    pub(crate) io: Box<[u8; 0x400]>,
     pub palette: Box<[u8; 0x400]>,
     pub vram: Box<[u8; 0x1_8000]>,
     pub oam: Box<[u8; 0x400]>,
     sram: Box<[u8; 0x1_0000]>,
     /// Frontend input, pre-encoded as KEYINPUT bits (active low).
     keyinput: u16,
+    pub ppu: crate::ppu::Ppu,
     /// Total elapsed (coarse) cycles since power-on.
     pub cycles: u64,
 }
@@ -32,6 +33,7 @@ impl Bus {
             oam: Box::new([0; 0x400]),
             sram: Box::new([0xFF; 0x1_0000]),
             keyinput: 0x03FF,
+            ppu: crate::ppu::Ppu::new(),
             cycles: 0,
         }
     }
