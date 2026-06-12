@@ -737,6 +737,9 @@ dependencies = [
 [[package]]
 name = "termboy-gba"
 version = "0.1.0"
+dependencies = [
+ "termboy-core",
+]
 
 [[package]]
 name = "thiserror"

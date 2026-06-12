@@ -14,6 +14,8 @@ pub struct Bus {
     pub vram: Box<[u8; 0x1_8000]>,
     pub oam: Box<[u8; 0x400]>,
     sram: Box<[u8; 0x1_0000]>,
+    /// Frontend input, pre-encoded as KEYINPUT bits (active low).
+    keyinput: u16,
     /// Total elapsed (coarse) cycles since power-on.
     pub cycles: u64,
 }
@@ -29,8 +31,14 @@ impl Bus {
             vram: Box::new([0; 0x1_8000]),
             oam: Box::new([0; 0x400]),
             sram: Box::new([0xFF; 0x1_0000]),
+            keyinput: 0x03FF,
             cycles: 0,
         }
+    }
+
+    /// Frontend input, pre-encoded as KEYINPUT bits. KEYCNT IRQs land in G4.
+    pub fn set_buttons(&mut self, buttons: termboy_core::Buttons) {
+        self.keyinput = crate::keypad::keyinput(buttons);
     }
 
     /// One internal (non-memory) cycle.
@@ -158,8 +166,8 @@ impl Bus {
             }
             0x006 => self.line() as u8, // VCOUNT
             0x007 => 0,
-            0x130 => 0xFF, // KEYINPUT low: all released (keypad lands in G2)
-            0x131 => 0x03, // KEYINPUT high: L/R released, unused bits 0
+            0x130 => self.keyinput as u8,
+            0x131 => (self.keyinput >> 8) as u8,
             _ => self.io[reg],
         }
     }
@@ -249,6 +257,16 @@ mod tests {
         b.write16(0x0400_0202, 0x0001); // write-1-to-acknowledge clears bit 0
         assert_eq!(b.read16(0x0400_0202), 0x0004);
         assert_eq!(b.read16(0x0400_0130), 0x03FF); // KEYINPUT: nothing pressed
+    }
+
+    #[test]
+    fn keyinput_reflects_buttons() {
+        use termboy_core::Buttons;
+        let mut b = bus();
+        b.set_buttons(Buttons::A.with(Buttons::L));
+        assert_eq!(b.read16(0x0400_0130), 0x01FE);
+        b.set_buttons(Buttons::default());
+        assert_eq!(b.read16(0x0400_0130), 0x03FF);
     }
 
     #[test]
