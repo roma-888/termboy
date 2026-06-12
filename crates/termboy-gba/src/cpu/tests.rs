@@ -972,3 +972,39 @@ fn swi_halt_sets_the_bus_flag() {
     cpu.step();
     assert!(cpu.bus.halted);
 }
+
+#[test]
+fn vblank_intr_wait_sleeps_until_the_isr_records_vblank() {
+    let mut cpu = cpu_with(&[
+        0xEF05_0000, // 0x08000000: SWI VBlankIntrWait
+        0xE3A0_4001, // 0x08000004: MOV r4, #1 (woke marker)
+        0xEAFF_FFFE, // 0x08000008: b $
+        0xE1A0_0000,
+        // 0x08000010: ISR — acknowledge IF and record in BIOS_IF
+        0xE3A0_1301, // MOV r1, #0x04000000
+        0xE281_1C02, // ADD r1, r1, #0x200
+        0xE3A0_2001, // MOV r2, #1
+        0xE1C1_20B2, // STRH r2, [r1, #2]   ; IF = 1
+        0xE3A0_3403, // MOV r3, #0x03000000
+        0xE283_3C7F, // ADD r3, r3, #0x7F00
+        0xE283_30F8, // ADD r3, r3, #0xF8   ; r3 = 0x03007FF8
+        0xE1D3_20B0, // LDRH r2, [r3]
+        0xE382_2001, // ORR r2, r2, #1
+        0xE1C3_20B0, // STRH r2, [r3]       ; BIOS_IF |= vblank
+        0xE12F_FF1E, // BX lr
+    ]);
+    cpu.bus.write32(0x0300_7FFC, 0x0800_0010);
+    cpu.bus.write16(0x0400_0200, 1); // IE: vblank (IME comes from IntrWait)
+    cpu.bus.write16(0x0400_0004, 1 << 3); // DISPSTAT: vblank IRQ enable
+    for _ in 0..500_000u32 {
+        if cpu.regs.get(4) == 1 {
+            break;
+        }
+        cpu.step_system();
+    }
+    assert_eq!(cpu.regs.get(4), 1, "VBlankIntrWait never woke");
+    assert!(cpu.bus.cycles >= 160 * 1232, "woke before vblank");
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::System);
+    assert_eq!(cpu.bus.read16(0x0300_7FF8) & 1, 0); // flag consumed
+    assert!(!cpu.bus.halted);
+}

@@ -3,7 +3,7 @@ pub mod registers;
 mod arm;
 mod thumb;
 #[cfg(test)]
-mod tests;
+pub mod tests;
 
 use crate::bus::Bus;
 use psr::{I, Mode, T};
@@ -21,6 +21,9 @@ pub struct Cpu {
     /// HLE BIOS seam: true = SWIs dispatch to bios.rs, false = jump to the
     /// hardware vector (requires a real BIOS image — future option).
     pub hle_bios: bool,
+    /// An IntrWait is in progress (the discard pass already ran); holds the
+    /// IF flags being waited on. See bios.rs.
+    pub(crate) intrwait: Option<u16>,
 }
 
 impl Cpu {
@@ -31,6 +34,7 @@ impl Cpu {
             pipeline: [0; 2],
             flushed: false,
             hle_bios: true,
+            intrwait: None,
         };
         cpu.regs.set(15, 0x0800_0000);
         cpu.flush();
