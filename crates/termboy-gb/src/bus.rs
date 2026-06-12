@@ -35,6 +35,10 @@ pub struct Bus {
     dma_src: u16,
     dma_idx: u8, // 0xA0 = idle
     dma_reg: u8,
+    hdma_src: u16,
+    hdma_dst: u16,
+    hdma_len: u8, // remaining 16-byte blocks minus one
+    hdma_active: bool,
 }
 
 impl Bus {
@@ -58,6 +62,10 @@ impl Bus {
             dma_src: 0,
             dma_idx: 0xA0,
             dma_reg: 0xFF,
+            hdma_src: 0,
+            hdma_dst: 0,
+            hdma_len: 0x7F,
+            hdma_active: false,
         }
     }
 
@@ -99,6 +107,34 @@ impl Bus {
             let value = self.read(self.dma_src + self.dma_idx as u16);
             self.ppu.oam[self.dma_idx as usize] = value;
             self.dma_idx += 1;
+        }
+        // HBlank DMA: one 16-byte block per hblank entry.
+        if self.ppu.hblank_pulse {
+            self.ppu.hblank_pulse = false;
+            if self.hdma_active {
+                self.hdma_copy_block();
+                if self.hdma_len == 0xFF {
+                    self.hdma_active = false;
+                } else {
+                    self.hdma_len = self.hdma_len.wrapping_sub(1);
+                    if self.hdma_len == 0xFF {
+                        self.hdma_active = false;
+                        self.hdma_len = 0x7F;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Copy one 16-byte HDMA block into VRAM (current VBK bank). Instant —
+    /// the cycle-stealing cost is a documented simplification.
+    fn hdma_copy_block(&mut self) {
+        for _ in 0..16 {
+            let v = self.read(self.hdma_src);
+            let dst = 0x8000 + (self.hdma_dst & 0x1FFF);
+            self.ppu.vram[(self.vbk as usize & 1) * 0x2000 + (dst - 0x8000) as usize] = v;
+            self.hdma_src = self.hdma_src.wrapping_add(1);
+            self.hdma_dst = (self.hdma_dst.wrapping_add(1)) & 0x1FFF;
         }
     }
 
@@ -162,6 +198,7 @@ impl Bus {
             0xFF69 if self.cgb => self.ppu.read_bcpd(),
             0xFF6A if self.cgb => self.ppu.read_ocps(),
             0xFF6B if self.cgb => self.ppu.read_ocpd(),
+            0xFF55 if self.cgb => ((!self.hdma_active as u8) << 7) | self.hdma_len,
             0xFF70 if self.cgb => self.svbk | 0xF8,
             _ => 0xFF,
         }
@@ -199,6 +236,27 @@ impl Bus {
             0xFF69 if self.cgb => self.ppu.write_bcpd(value),
             0xFF6A if self.cgb => self.ppu.write_ocps(value),
             0xFF6B if self.cgb => self.ppu.write_ocpd(value),
+            0xFF51 if self.cgb => self.hdma_src = (self.hdma_src & 0x00FF) | ((value as u16) << 8),
+            0xFF52 if self.cgb => self.hdma_src = (self.hdma_src & 0xFF00) | (value as u16 & 0xF0),
+            0xFF53 if self.cgb => self.hdma_dst = (self.hdma_dst & 0x00FF) | ((value as u16 & 0x1F) << 8),
+            0xFF54 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xFF00) | (value as u16 & 0xF0),
+            0xFF55 if self.cgb => {
+                if value & 0x80 != 0 {
+                    // arm HBlank DMA
+                    self.hdma_len = value & 0x7F;
+                    self.hdma_active = true;
+                } else if self.hdma_active {
+                    // cancel mid-transfer; remaining length stays readable
+                    self.hdma_active = false;
+                } else {
+                    // general-purpose DMA: copy everything now
+                    self.hdma_len = value & 0x7F;
+                    for _ in 0..=(value & 0x7F) {
+                        self.hdma_copy_block();
+                    }
+                    self.hdma_len = 0x7F; // reads back 0xFF (complete)
+                }
+            }
             0xFF70 if self.cgb => self.svbk = value & 7,
             _ => {}
         }
@@ -336,6 +394,58 @@ use crate::joypad::Joypad;
             b.tick();
         }
         assert_eq!(b.read(0xFF44), 1);
+    }
+
+    #[test]
+    fn general_hdma_copies_immediately() {
+        let mut b = cgb_bus();
+        for i in 0..32u16 {
+            b.write(0xC000 + i, i as u8 + 1);
+        }
+        b.write(0xFF51, 0xC0);
+        b.write(0xFF52, 0x00);
+        b.write(0xFF53, 0x00); // dest 0x8000
+        b.write(0xFF54, 0x00);
+        b.write(0xFF55, 0x01); // 2 blocks, general
+        assert_eq!(b.read(0x8000), 1);
+        assert_eq!(b.read(0x801F), 32);
+        assert_eq!(b.read(0xFF55), 0xFF); // complete
+    }
+
+    #[test]
+    fn hblank_hdma_copies_one_block_per_hblank() {
+        let mut b = cgb_bus();
+        for i in 0..32u16 {
+            b.write(0xC000 + i, 0xAB);
+        }
+        b.write(0xFF51, 0xC0);
+        b.write(0xFF52, 0x00);
+        b.write(0xFF53, 0x00);
+        b.write(0xFF54, 0x00);
+        b.write(0xFF55, 0x81); // 2 blocks, hblank mode
+        assert_eq!(b.read(0xFF55), 0x01); // active, 2 blocks left
+        assert_eq!(b.read(0x8000), 0x00); // nothing copied yet
+        // run to the first hblank (dot 252 of line 0 = 63 M-cycles)
+        for _ in 0..64 {
+            b.tick();
+        }
+        assert_eq!(b.read(0x8000), 0xAB);
+        assert_eq!(b.read(0x8010), 0x00); // second block not yet
+        assert_eq!(b.read(0xFF55), 0x00); // active, 1 block left
+        // run to the next hblank (one full scanline = 114 M-cycles)
+        for _ in 0..114 {
+            b.tick();
+        }
+        assert_eq!(b.read(0x8010), 0xAB);
+        assert_eq!(b.read(0xFF55), 0xFF); // done
+    }
+
+    #[test]
+    fn hblank_hdma_cancel_keeps_remaining_length() {
+        let mut b = cgb_bus();
+        b.write(0xFF55, 0x85); // 6 blocks, hblank mode
+        b.write(0xFF55, 0x00); // cancel
+        assert_eq!(b.read(0xFF55), 0x85); // inactive bit set, length preserved
     }
 
     #[test]

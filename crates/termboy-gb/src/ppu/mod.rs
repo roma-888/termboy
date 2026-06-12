@@ -41,6 +41,8 @@ pub struct Ppu {
     /// 160x144 RGB555 pixels. (CGB mode)
     pub frame_rgb: Vec<u16>,
     pub frame_ready: bool,
+    /// Set on mode-0 (hblank) entry; consumed by the bus for HBlank DMA.
+    pub hblank_pulse: bool,
     // CGB palette RAM: 8 palettes x 4 colors x 2 bytes, BG and OBJ
     pub(crate) bg_pal: [u8; 64],
     pub(crate) obj_pal: [u8; 64],
@@ -73,6 +75,7 @@ impl Ppu {
             frame: [0; 160 * 144],
             frame_rgb: vec![0; 160 * 144],
             frame_ready: false,
+            hblank_pulse: false,
             bg_pal: [0xFF; 64],
             obj_pal: [0xFF; 64],
             bcps: 0,
@@ -105,6 +108,7 @@ impl Ppu {
         }
         if self.dot == 252 && self.ly < 144 {
             self.render_line(); // entering hblank: line is complete on real HW
+            self.hblank_pulse = true;
         }
         irq | self.update_stat()
     }
