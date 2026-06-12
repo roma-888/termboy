@@ -9,6 +9,9 @@ use crate::bus::Bus;
 use psr::{I, Mode, T};
 use registers::Registers;
 
+/// Where the real BIOS resumes after a user ISR returns (the ldmfd/subs shim).
+pub(crate) const BIOS_IRQ_RETURN: u32 = 0x138;
+
 pub struct Cpu {
     pub regs: Registers,
     pub bus: Bus,
@@ -57,8 +60,29 @@ impl Cpu {
         self.flushed = true;
     }
 
+    /// One whole-system tick: run one instruction (or idle while halted),
+    /// then deliver timing events and any pending interrupt. DMA preemption
+    /// is added in the DMA task.
+    pub fn step_system(&mut self) {
+        if self.bus.halted {
+            self.bus.idle();
+        } else {
+            self.step();
+        }
+        self.bus.catch_up();
+        if self.bus.halted && self.bus.irq_asserted() {
+            self.bus.halted = false;
+        }
+        if self.bus.irq_pending() {
+            self.irq();
+        }
+    }
+
     /// Execute one instruction.
     pub fn step(&mut self) {
+        if self.hle_bios && self.exec_addr() == BIOS_IRQ_RETURN {
+            return self.hle_irq_return();
+        }
         self.flushed = false;
         if self.regs.cpsr.thumb() {
             let op = self.pipeline[0] as u16;
@@ -117,14 +141,50 @@ impl Cpu {
         self.flush();
     }
 
-    /// Hardware IRQ entry. Wired to IE/IF/IME in G4; the exception mechanics
-    /// are unit-tested now so G4 is pure plumbing.
+    /// Hardware IRQ entry. With HLE BIOS, also emulate the BIOS dispatch
+    /// stub: stmfd sp!, {r0-r3,r12,lr}; mov r0, #0x04000000; adr lr, 0x138;
+    /// ldr pc, [0x03007FFC]. The 0x138 return shim is trapped in step().
     pub fn irq(&mut self) {
         if self.regs.cpsr.flag(I) {
             return;
         }
         let lr = self.exec_addr().wrapping_add(4);
-        self.exception(0x18, Mode::Irq, lr);
+        if !self.hle_bios {
+            self.exception(0x18, Mode::Irq, lr);
+            return;
+        }
+        let old = self.regs.cpsr;
+        self.regs.switch_mode(Mode::Irq);
+        self.regs.set_spsr(old);
+        self.regs.cpsr.set_flag(T, false);
+        self.regs.cpsr.set_flag(I, true);
+        self.regs.set(14, lr);
+        let sp = self.regs.get(13).wrapping_sub(24);
+        self.regs.set(13, sp);
+        for (i, r) in [0usize, 1, 2, 3, 12, 14].into_iter().enumerate() {
+            let v = self.regs.get(r);
+            self.bus.write32(sp.wrapping_add(4 * i as u32), v);
+        }
+        self.regs.set(0, 0x0400_0000);
+        self.regs.set(14, BIOS_IRQ_RETURN);
+        let handler = self.bus.read32(0x0300_7FFC);
+        self.regs.set(15, handler);
+        self.flush();
+    }
+
+    /// The BIOS code at 0x138: ldmfd sp!, {r0-r3,r12,lr}; subs pc, lr, #4.
+    fn hle_irq_return(&mut self) {
+        let sp = self.regs.get(13);
+        for (i, r) in [0usize, 1, 2, 3, 12, 14].into_iter().enumerate() {
+            let v = self.bus.read32(sp.wrapping_add(4 * i as u32));
+            self.regs.set(r, v);
+        }
+        self.regs.set(13, sp.wrapping_add(24));
+        let target = self.regs.get(14).wrapping_sub(4);
+        let spsr = self.regs.spsr();
+        self.regs.write_cpsr(spsr);
+        self.regs.set(15, target);
+        self.flush();
     }
 
     pub(crate) fn set_nz(&mut self, result: u32) {

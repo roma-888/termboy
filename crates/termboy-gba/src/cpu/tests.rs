@@ -853,6 +853,7 @@ fn undefined_instruction_takes_the_vector() {
 #[test]
 fn irq_entry_and_masking() {
     let mut cpu = cpu_with(&[0xE1A0_0000, 0xE1A0_0000]); // NOPs
+    cpu.hle_bios = false; // raw hardware vector path
     cpu.step();
     cpu.irq();
     assert_eq!(cpu.regs.cpsr.mode(), Mode::Irq);
@@ -892,4 +893,82 @@ fn mov_to_pc_branches() {
     let mut cpu = cpu_with(&[0xE3A0_F00C]); // MOV pc, #12
     cpu.step();
     assert_eq!(cpu.exec_addr(), 0x0000_000C); // absolute (BIOS region)
+}
+
+#[test]
+fn hle_irq_dispatches_through_ram_vector_and_returns() {
+    let mut cpu = cpu_with(&[
+        0xE1A0_0000, // 0x08000000: nop
+        0xE1A0_0000, // 0x08000004: resume point after the ISR
+        0xE1A0_0000,
+        0xE1A0_0000,
+        // 0x08000010: user IRQ handler
+        0xE3A0_1301, // MOV r1, #0x04000000
+        0xE281_1C02, // ADD r1, r1, #0x200
+        0xE3A0_2001, // MOV r2, #1
+        0xE1C1_20B2, // STRH r2, [r1, #2]   ; IF = 1 (acknowledge vblank)
+        0xE3A0_4063, // MOV r4, #0x63       ; marker (r4 is not stub-saved)
+        0xE12F_FF1E, // BX lr               ; -> BIOS return shim at 0x138
+    ]);
+    cpu.bus.write32(0x0300_7FFC, 0x0800_0010);
+    cpu.step(); // execute the first nop
+    let resume = cpu.exec_addr(); // 0x08000004
+    let sp_before = cpu.regs.get(13);
+    cpu.regs.set(0, 0xAAAA); // clobber-check: stub must save/restore r0-r3,r12
+    cpu.bus.raise_irq(1);
+    cpu.irq();
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::Irq);
+    assert_eq!(cpu.exec_addr(), 0x0800_0010); // straight into the handler
+    assert_eq!(cpu.regs.get(0), 0x0400_0000); // the stub's MOV r0
+    assert!(cpu.regs.cpsr.flag(I));
+    for _ in 0..6 {
+        cpu.step(); // run the handler through BX lr
+    }
+    assert_eq!(cpu.exec_addr(), 0x138); // parked on the return shim
+    cpu.step(); // HLE ldmfd + subs pc, lr, #4
+    assert_eq!(cpu.exec_addr(), resume);
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::System);
+    assert!(!cpu.regs.cpsr.flag(I));
+    assert_eq!(cpu.regs.get(0), 0xAAAA); // restored
+    assert_eq!(cpu.regs.get(4), 0x63); // handler really ran
+    assert_eq!(cpu.regs.get(13), sp_before);
+    assert_eq!(cpu.bus.read16(0x0400_0202), 0); // acknowledged
+}
+
+#[test]
+fn irq_pending_needs_ime_ie_and_if() {
+    let mut cpu = cpu_with(&[0xE1A0_0000]);
+    cpu.bus.write16(0x0400_0200, 1); // IE
+    cpu.bus.raise_irq(1); // IF
+    assert!(!cpu.bus.irq_pending()); // IME off
+    cpu.bus.write16(0x0400_0208, 1);
+    assert!(cpu.bus.irq_pending());
+    cpu.bus.write16(0x0400_0202, 1); // acknowledge
+    assert!(!cpu.bus.irq_pending());
+}
+
+#[test]
+fn halt_idles_until_ie_and_if_intersect_even_with_ime_off() {
+    let mut cpu = cpu_with(&[0xE1A0_0000, 0xE1A0_0000, 0xE1A0_0000]);
+    cpu.bus.write16(0x0400_0200, 1); // IE: vblank
+    cpu.bus.write8(0x0400_0301, 0); // HALTCNT
+    assert!(cpu.bus.halted);
+    let pc = cpu.exec_addr();
+    for _ in 0..8 {
+        cpu.step_system();
+    }
+    assert_eq!(cpu.exec_addr(), pc); // nothing executed
+    cpu.bus.raise_irq(1); // IE & IF intersect; IME still 0
+    cpu.step_system(); // wakes at the end of this tick
+    assert!(!cpu.bus.halted);
+    cpu.step_system(); // IME=0: no dispatch, execution just continues
+    assert_ne!(cpu.exec_addr(), pc);
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::System);
+}
+
+#[test]
+fn swi_halt_sets_the_bus_flag() {
+    let mut cpu = cpu_with(&[0xEF02_0000]); // SWI 0x02 = Halt
+    cpu.step();
+    assert!(cpu.bus.halted);
 }

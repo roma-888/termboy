@@ -1,5 +1,6 @@
 //! GBA memory map at coarse timing: every access is one cycle (real
-//! waitstates land in G7). The CPU is the only bus master until DMA (G4).
+//! waitstates land in G7). Bus::catch_up walks scanline-granular timing
+//! events to drive rendering and IRQ sources between CPU steps.
 
 pub(crate) const CYCLES_PER_LINE: u64 = 1232;
 pub(crate) const LINES: u64 = 228;
@@ -212,7 +213,17 @@ impl Bus {
         u16::from_le_bytes([self.palette[index * 2], self.palette[index * 2 + 1]])
     }
 
-    /// Raise IF bits the way hardware peripherals do (G4 wires real sources).
+    /// IE & IF intersect — the wake condition for HALT (IME is ignored).
+    pub fn irq_asserted(&self) -> bool {
+        self.io16(0x200) & self.io16(0x202) & 0x3FFF != 0
+    }
+
+    /// An interrupt should actually be delivered to the CPU.
+    pub fn irq_pending(&self) -> bool {
+        self.io[0x208] & 1 != 0 && self.irq_asserted()
+    }
+
+    /// Raise IF bits the way hardware peripherals do.
     pub fn raise_irq(&mut self, bits: u16) {
         let cur = u16::from_le_bytes([self.io[0x202], self.io[0x203]]);
         let [a, b] = (cur | bits).to_le_bytes();
@@ -251,6 +262,11 @@ impl Bus {
         let reg = (addr as usize) & 0x3FF;
         match reg {
             0x202 | 0x203 => self.io[reg] &= !value, // IF: write-1-to-acknowledge
+            // HALTCNT: any write halts (bit 7 = Stop, same thing at coarse timing)
+            0x301 => {
+                self.io[reg] = value;
+                self.halted = true;
+            }
             // BG2X/Y, BG3X/Y: writing relatches the affine reference point
             0x028..=0x02F => {
                 self.io[reg] = value;

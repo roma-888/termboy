@@ -8,6 +8,7 @@ use crate::cpu::Cpu;
 impl Cpu {
     pub(crate) fn bios_call(&mut self, function: u32) {
         match function {
+            0x02 | 0x03 => self.bus.halted = true, // Halt / Stop
             // Div: r0/r1 -> r0 = quotient, r1 = remainder, r3 = |quotient|
             0x06 => {
                 let n = self.regs.get(0) as i32;

@@ -45,8 +45,7 @@ impl Core for GbaCore {
         // the PPU somehow never signals (e.g. a ROM that stops the clock).
         let cap = self.cpu.bus.cycles + CYCLES_PER_FRAME;
         while !self.cpu.bus.ppu.frame_ready && self.cpu.bus.cycles < cap {
-            self.cpu.step();
-            self.cpu.bus.catch_up();
+            self.cpu.step_system();
         }
         for (i, &c) in self.cpu.bus.ppu.frame.iter().enumerate() {
             self.frame.pixels[i] = ppu::bgr555_to_rgb(c);
