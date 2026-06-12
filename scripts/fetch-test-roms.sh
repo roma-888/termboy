@@ -27,3 +27,8 @@ echo "fetched dmg-acid2/dmg-acid2.gb"
 
 curl -sfL "$base/cpu_instrs/cpu_instrs.gb" -o "$dest/cpu_instrs/cpu_instrs.gb"
 echo "fetched cpu_instrs/cpu_instrs.gb"
+
+mkdir -p "$dest/cgb-acid2"
+curl -sfL "https://github.com/mattcurrie/cgb-acid2/releases/download/v1.1/cgb-acid2.gbc" \
+  -o "$dest/cgb-acid2/cgb-acid2.gbc"
+echo "fetched cgb-acid2/cgb-acid2.gbc"

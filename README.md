@@ -1,6 +1,6 @@
 # termboy
 
-A Game Boy emulator that runs in your terminal.
+A Game Boy and Game Boy Color emulator that runs in your terminal.
 
 ![dmg-acid2 rendered by termboy](assets/dmg-acid2.png)
 
@@ -8,10 +8,11 @@ Written in Rust. Targets the original Game Boy (DMG) first, with an architecture
 
 ## Status
 
-Milestone 4 complete: MBC1 + MBC3 cartridges with battery saves (`<rom>.sav`,
-auto-flushed) and the MBC3 real-time clock. Tetris, Zelda, Mario Land and
-Pokémon Red are playable with persistent saves. Blargg cpu_instrs (individual
-+ combined) + instr_timing and dmg-acid2 (pixel-exact) all pass.
+Game Boy Color support is in: GBC games run in full color (banked VRAM/WRAM,
+color palettes, double-speed CPU, HDMA, MBC5) alongside the original DMG
+library. MBC1/MBC3/MBC5 with battery saves (`<rom>.sav`, auto-flushed) and the
+MBC3 real-time clock. Blargg cpu_instrs + instr_timing, dmg-acid2 AND
+cgb-acid2 (both pixel-exact vs official references) all pass.
 
 - `cargo run --release -p termboy -- <rom.gb>` — play a ROM in any truecolor terminal (pixel-perfect at 160x72+, auto-scaled to fit below that; `--exact` disables scaling)
 - `--palette green|gray|pocket` or four hex colors (`--palette '#e0f8d0,#88c070,#346856,#081820'`)

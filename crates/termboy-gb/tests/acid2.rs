@@ -30,3 +30,25 @@ fn dmg_acid2_matches_golden() {
     let diff = shades.iter().zip(&golden).filter(|(a, b)| a != b).count();
     assert_eq!(diff, 0, "{diff} of 23040 pixels differ from blessed golden");
 }
+
+#[test]
+fn cgb_acid2_matches_golden() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let rom = std::fs::read(dir.join("roms/cgb-acid2/cgb-acid2.gbc"))
+        .expect("missing cgb-acid2.gbc — run scripts/fetch-test-roms.sh");
+    let mut gb = GameBoy::new(rom).expect("rom loads");
+    for _ in 0..120 {
+        gb.run_frame(Buttons::default());
+    }
+    let rgb: Vec<u8> = gb.frame_rgb555().iter().flat_map(|c| c.to_le_bytes()).collect();
+
+    let golden_path = dir.join("golden/cgb-acid2.bin");
+    if std::env::var("UPDATE_GOLDEN").is_ok() {
+        std::fs::write(&golden_path, &rgb).unwrap();
+        panic!("golden updated — verify VISUALLY against the cgb-acid2 reference, then rerun");
+    }
+    let golden = std::fs::read(&golden_path)
+        .expect("missing golden — bless with UPDATE_GOLDEN=1 after visual verification");
+    let diff = rgb.iter().zip(&golden).filter(|(a, b)| a != b).count();
+    assert_eq!(diff, 0, "{diff} bytes differ from blessed golden");
+}

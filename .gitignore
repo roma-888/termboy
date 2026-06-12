@@ -5,3 +5,4 @@
 !crates/termboy-gb/tests/roms/**/*.gb
 docs/superpowers/
 /roms/
+!crates/termboy-gb/tests/roms/**/*.gbc
