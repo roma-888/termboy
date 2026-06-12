@@ -321,7 +321,82 @@ impl Cpu {
         }
     }
     fn arm_block_transfer(&mut self, op: u32) {
-        self.todo(op)
+        let p = op & (1 << 24) != 0;
+        let u = op & (1 << 23) != 0;
+        let s = op & (1 << 22) != 0;
+        let w = op & (1 << 21) != 0;
+        let l = op & (1 << 20) != 0;
+        let rn = ((op >> 16) & 0xF) as usize;
+        let mut rlist = op & 0xFFFF;
+        let base = self.regs.get(rn);
+
+        // Empty rlist (ARMv4): r15 alone transfers, base moves by 0x40.
+        let empty = rlist == 0;
+        if empty {
+            rlist = 1 << 15;
+        }
+        let count = if empty { 16 } else { rlist.count_ones() };
+
+        let new_base =
+            if u { base.wrapping_add(count * 4) } else { base.wrapping_sub(count * 4) };
+        // The transfer loop always ascends from the bottom of the block.
+        let mut addr = if u { base } else { new_base };
+        if p == u {
+            addr = addr.wrapping_add(4);
+        }
+
+        // S bit: SPSR restore if (and only if) this is an LDM with r15;
+        // otherwise it means "use the user-mode register bank".
+        let user_bank = s && !(l && rlist & (1 << 15) != 0);
+
+        if l {
+            self.bus.idle();
+            // Writeback before the loads: a base inside the list ends up
+            // with the loaded value (ARMv4 behavior).
+            if w {
+                self.regs.set(rn, new_base);
+            }
+            for i in 0..16usize {
+                if rlist & (1 << i) == 0 {
+                    continue;
+                }
+                let v = self.bus.read32(addr);
+                addr = addr.wrapping_add(4);
+                if user_bank {
+                    self.regs.set_user(i, v);
+                } else {
+                    self.regs.set(i, v);
+                }
+            }
+            if rlist & (1 << 15) != 0 {
+                if s {
+                    let spsr = self.regs.spsr();
+                    self.regs.write_cpsr(spsr);
+                }
+                self.flush();
+            }
+        } else {
+            let mut first = true;
+            for i in 0..16usize {
+                if rlist & (1 << i) == 0 {
+                    continue;
+                }
+                let mut v =
+                    if user_bank { self.regs.get_user(i) } else { self.regs.get(i) };
+                if i == 15 {
+                    v = v.wrapping_add(4); // STM stores PC+12
+                }
+                if i == rn && !first && w {
+                    v = new_base; // base already written back by the time it stores
+                }
+                self.bus.write32(addr, v);
+                addr = addr.wrapping_add(4);
+                first = false;
+            }
+            if w {
+                self.regs.set(rn, new_base);
+            }
+        }
     }
     fn arm_swi(&mut self, op: u32) {
         self.todo(op)

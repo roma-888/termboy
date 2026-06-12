@@ -455,6 +455,108 @@ fn swp_word_and_byte() {
 }
 
 #[test]
+fn stm_ldm_roundtrip_with_writeback() {
+    // STMIA r0!, {r1-r3} ; LDMDB r0!, {r4-r6}
+    let mut cpu = cpu_with(&[0xE8A0_000E, 0xE930_0070]);
+    cpu.regs.set(0, 0x0200_0000);
+    cpu.regs.set(1, 0x11);
+    cpu.regs.set(2, 0x22);
+    cpu.regs.set(3, 0x33);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x0200_000C);
+    assert_eq!(cpu.bus.read32(0x0200_0000), 0x11);
+    assert_eq!(cpu.bus.read32(0x0200_0008), 0x33);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x0200_0000); // DB walked back down
+    assert_eq!((cpu.regs.get(4), cpu.regs.get(5), cpu.regs.get(6)), (0x11, 0x22, 0x33));
+}
+
+#[test]
+fn push_pop_idiom() {
+    // STMDB sp!, {r0, r1, lr} ; LDMIA sp!, {r2, r3, pc}
+    let mut cpu = cpu_with(&[0xE92D_4003, 0xE8BD_800C]);
+    let sp0 = cpu.regs.get(13);
+    cpu.regs.set(0, 0xA);
+    cpu.regs.set(1, 0xB);
+    cpu.regs.set(14, 0x0800_0200);
+    cpu.step();
+    assert_eq!(cpu.regs.get(13), sp0 - 12);
+    cpu.step();
+    assert_eq!(cpu.regs.get(13), sp0);
+    assert_eq!((cpu.regs.get(2), cpu.regs.get(3)), (0xA, 0xB));
+    assert_eq!(cpu.exec_addr(), 0x0800_0200); // pc popped -> branch
+}
+
+#[test]
+fn stm_base_first_in_list_stores_original_base() {
+    let mut cpu = cpu_with(&[0xE8A0_0003]); // STMIA r0!, {r0, r1}
+    cpu.regs.set(0, 0x0200_0000);
+    cpu.regs.set(1, 7);
+    cpu.step();
+    assert_eq!(cpu.bus.read32(0x0200_0000), 0x0200_0000); // original base
+    assert_eq!(cpu.regs.get(0), 0x0200_0008);
+}
+
+#[test]
+fn stm_base_not_first_stores_written_back_base() {
+    let mut cpu = cpu_with(&[0xE8A1_0003]); // STMIA r1!, {r0, r1}
+    cpu.regs.set(0, 7);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.step();
+    assert_eq!(cpu.bus.read32(0x0200_0004), 0x0200_0008); // new base stored
+}
+
+#[test]
+fn ldm_base_in_list_loaded_value_wins() {
+    let mut cpu = cpu_with(&[0xE8B0_0003]); // LDMIA r0!, {r0, r1}
+    cpu.bus.write32(0x0200_0000, 0x0BAD_CAFE);
+    cpu.bus.write32(0x0200_0004, 0x55);
+    cpu.regs.set(0, 0x0200_0000);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x0BAD_CAFE); // not the written-back base
+    assert_eq!(cpu.regs.get(1), 0x55);
+}
+
+#[test]
+fn empty_rlist_transfers_r15_and_moves_base_by_0x40() {
+    let mut cpu = cpu_with(&[0xE8A0_0000]); // STMIA r0!, {}
+    cpu.regs.set(0, 0x0200_0000);
+    cpu.step();
+    assert_eq!(cpu.bus.read32(0x0200_0000), 0x0800_000C); // r15 = PC+12
+    assert_eq!(cpu.regs.get(0), 0x0200_0040);
+}
+
+#[test]
+fn stm_user_bank_from_exception_mode() {
+    // MSR CPSR_c, r0 (-> IRQ) ; STMIA r1, {r13, r14}^
+    let mut cpu = cpu_with(&[0xE121_F000, 0xE8C1_6000]);
+    cpu.regs.set(0, 0x12);
+    cpu.regs.set(1, 0x0200_0000);
+    let user_sp = cpu.regs.get(13); // captured while still in System
+    cpu.regs.set(14, 0x4444_4444);
+    cpu.step(); // now in IRQ mode; r13/r14 are the IRQ bank
+    cpu.step();
+    assert_eq!(cpu.bus.read32(0x0200_0000), user_sp); // user bank, not IRQ's
+    assert_eq!(cpu.bus.read32(0x0200_0004), 0x4444_4444);
+}
+
+#[test]
+fn ldm_with_pc_and_s_bit_restores_cpsr() {
+    // MSR CPSR_c, r0 (-> IRQ) ; MSR SPSR_fc, r2 ; LDMIA r1, {pc}^
+    let mut cpu = cpu_with(&[0xE121_F000, 0xE169_F002, 0xE8D1_8000]);
+    cpu.regs.set(0, 0x12);
+    cpu.regs.set(2, 0x6000_001F); // System mode, C+Z set
+    cpu.bus.write32(0x0200_0000, 0x0800_0100);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.step();
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.exec_addr(), 0x0800_0100);
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::System);
+    assert!(cpu.regs.cpsr.flag(Z) && cpu.regs.cpsr.flag(C));
+}
+
+#[test]
 fn mov_to_pc_branches() {
     let mut cpu = cpu_with(&[0xE3A0_F00C]); // MOV pc, #12
     cpu.step();
