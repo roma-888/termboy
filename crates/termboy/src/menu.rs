@@ -110,12 +110,9 @@ fn draw(roms: &[Entry], selected: usize) {
             lines.push(format!("  {}{BOLD}{title}{RESET} {}{rule}{RESET}", rom.kind.color(), rom.kind.color()));
         }
         let name = rom.path.file_stem().map(|n| n.to_string_lossy()).unwrap_or_default();
-        let note = if rom.kind == Kind::Advance { " · core coming soon" } else { "" };
         if i == selected {
             selected_line = lines.len();
-            lines.push(format!("   {}\x1b[7m ▸ {name}{note} {RESET}", rom.kind.color()));
-        } else if rom.kind == Kind::Advance {
-            lines.push(format!("     {DIM}{name}{note}{RESET}"));
+            lines.push(format!("   {}\x1b[7m ▸ {name} {RESET}", rom.kind.color()));
         } else {
             lines.push(format!("     {name}"));
         }

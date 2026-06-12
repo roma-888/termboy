@@ -20,9 +20,10 @@ use crossterm::event::{
 use crossterm::{cursor, execute, terminal};
 use termboy_core::{Buttons, Core, Rgb};
 use termboy_gb::{DMG_GREEN, GameBoy};
+use termboy_gba::GbaCore;
 
 const USAGE: &str = "\
-usage: termboy [options] [rom.gb]
+usage: termboy [options] [rom.gb|rom.gba]
 
 with no rom argument, termboy opens a game picker for ./roms (or .)
 
@@ -34,7 +35,7 @@ options:
   --headless         run without UI, print serial output (debug tool)
   -h, --help         show this help
 
-controls: arrows = D-pad, X = A, Z = B, Enter = Start, Tab = Select, Esc = quit";
+controls: arrows = D-pad, X = A, Z = B, A/S = L/R, Enter = Start, Tab = Select, Esc = quit";
 
 fn parse_palette(name: &str) -> Option<[Rgb; 4]> {
     match name {
@@ -80,8 +81,8 @@ fn write_save(path: &Path, data: &[u8]) -> std::io::Result<()> {
 }
 
 /// Write the battery save if it changed since the last flush.
-fn flush_save(gb: &GameBoy, sav: &Path, last: &mut Option<Vec<u8>>) {
-    if let Some(data) = gb.save_ram() {
+fn flush_save(core: &impl Core, sav: &Path, last: &mut Option<Vec<u8>>) {
+    if let Some(data) = core.save_ram() {
         if last.as_deref() != Some(&data[..]) && write_save(sav, &data).is_ok() {
             *last = Some(data);
         }
@@ -179,6 +180,19 @@ fn main() -> ExitCode {
         }
     }
     match rom_arg {
+        Some(path) if is_gba(path) => {
+            if headless {
+                eprintln!("error: --headless is for GB serial test ROMs; GBA has no serial console");
+                return ExitCode::FAILURE;
+            }
+            match load_gba(path) {
+                Ok(core) => run_terminal(core, 240, 160, exact, &sav_path(path), keymap),
+                Err(msg) => {
+                    eprintln!("error: {msg}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some(path) => {
             let (gb, sav) = match load_game(path, palette) {
                 Ok(pair) => pair,
@@ -190,7 +204,7 @@ fn main() -> ExitCode {
             if headless {
                 run_headless(gb, &sav)
             } else {
-                run_terminal(gb, exact, &sav, keymap)
+                run_terminal(gb, 160, 144, exact, &sav, keymap)
             }
         }
         None if headless => {
@@ -199,6 +213,18 @@ fn main() -> ExitCode {
         }
         None => run_menu(palette, exact, keymap),
     }
+}
+
+fn is_gba(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("gba"))
+}
+
+fn load_gba(path: &str) -> Result<GbaCore, String> {
+    let rom = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    GbaCore::new(rom)
 }
 
 fn load_game(path: &str, palette: [Rgb; 4]) -> Result<(GameBoy, PathBuf), String> {
@@ -221,7 +247,7 @@ fn run_menu(
     let rom_dir = if Path::new("roms").is_dir() { Path::new("roms") } else { Path::new(".") };
     let roms = menu::scan_roms(rom_dir);
     if roms.is_empty() {
-        eprintln!("no .gb/.gbc files found in {}", rom_dir.display());
+        eprintln!("no .gb/.gbc/.gba files found in {}", rom_dir.display());
         return ExitCode::FAILURE;
     }
     install_panic_hook();
@@ -237,32 +263,37 @@ fn run_menu(
         let Some(i) = menu::pick(&roms) else {
             return ExitCode::SUCCESS;
         };
-        if roms[i].kind == menu::Kind::Advance {
-            print!(
-                "\x1b[0m\x1b[2J\x1b[H  Game Boy Advance support is on the roadmap — \
-                 this one will work eventually!\r\n\r\n  press any key"
-            );
+        let path = roms[i].path.to_string_lossy().into_owned();
+        let launch_err = if roms[i].kind == menu::Kind::Advance {
+            match load_gba(&path) {
+                Ok(core) => {
+                    let mut input = input::Input::new(guard.enhanced, keymap.clone());
+                    let mut screen = screen::Screen::new(240, 160);
+                    print!("\x1b[0m\x1b[2J");
+                    run_game(core, exact, &sav_path(&path), &mut input, &mut screen, &audio);
+                    // Esc in-game returns here: back to the picker.
+                    None
+                }
+                Err(msg) => Some(msg),
+            }
+        } else {
+            match load_game(&path, palette) {
+                Ok((gb, sav)) => {
+                    let mut input = input::Input::new(guard.enhanced, keymap.clone());
+                    let mut screen = screen::Screen::new(160, 144);
+                    print!("\x1b[0m\x1b[2J");
+                    run_game(gb, exact, &sav, &mut input, &mut screen, &audio);
+                    None
+                }
+                Err(msg) => Some(msg),
+            }
+        };
+        if let Some(msg) = launch_err {
+            // show the error in the picker session briefly
+            print!("\x1b[0m\x1b[2J\x1b[Herror: {msg}\r\n\r\npress any key");
             use std::io::Write as _;
             std::io::stdout().flush().ok();
             let _ = event::read();
-            continue;
-        }
-        let path = roms[i].path.to_string_lossy().into_owned();
-        match load_game(&path, palette) {
-            Ok((gb, sav)) => {
-                let mut input = input::Input::new(guard.enhanced, keymap.clone());
-                let mut screen = screen::Screen::new(160, 144);
-                print!("\x1b[0m\x1b[2J");
-                run_game(gb, exact, &sav, &mut input, &mut screen, &audio);
-                // Esc in-game returns here: back to the picker.
-            }
-            Err(msg) => {
-                // show the error in the picker session briefly
-                print!("\x1b[0m\x1b[2J\x1b[Herror: {msg}\r\n\r\npress any key");
-                use std::io::Write as _;
-                std::io::stdout().flush().ok();
-                let _ = event::read();
-            }
         }
     }
 }
@@ -339,8 +370,10 @@ fn install_panic_hook() {
     }));
 }
 
-fn run_terminal(
-    gb: GameBoy,
+fn run_terminal<C: Core>(
+    core: C,
+    width: usize,
+    height: usize,
     exact: bool,
     sav: &Path,
     keymap: std::collections::HashMap<crossterm::event::KeyCode, termboy_core::Buttons>,
@@ -354,21 +387,21 @@ fn run_terminal(
         }
     };
     let mut input = input::Input::new(guard.enhanced, keymap);
-    let mut screen = screen::Screen::new(160, 144);
+    let mut screen = screen::Screen::new(width, height);
     let audio = audio::Audio::new();
-    run_game(gb, exact, sav, &mut input, &mut screen, &audio)
+    run_game(core, exact, sav, &mut input, &mut screen, &audio)
 }
 
 /// Run one game until Esc. Assumes raw mode + alternate screen are active.
-fn run_game(
-    mut gb: GameBoy,
+fn run_game<C: Core>(
+    mut core: C,
     exact: bool,
     sav: &Path,
     input: &mut input::Input,
     screen: &mut screen::Screen,
     audio: &audio::Audio,
 ) -> ExitCode {
-    gb.set_audio_rate(audio.sample_rate);
+    core.set_audio_rate(audio.sample_rate);
     let mut audio_buf: Vec<(f32, f32)> = Vec::new();
     let (need_cols, need_rows) = screen.required_size();
     let mut last_size = (0u16, 0u16);
@@ -376,7 +409,7 @@ fn run_game(
 
     let mut out = String::new();
     let mut next_frame = Instant::now();
-    let mut last_saved: Option<Vec<u8>> = gb.save_ram();
+    let mut last_saved: Option<Vec<u8>> = core.save_ram();
     let mut frames: u32 = 0;
     let code = 'game: loop {
         // Input: Esc quits, everything else goes to the tracker.
@@ -421,10 +454,10 @@ fn run_game(
             std::io::stdout().flush().ok();
         }
 
-        let fb = gb.run_frame(input.buttons(Instant::now()));
+        let fb = core.run_frame(input.buttons(Instant::now()));
         out.clear();
         screen.render(fb, &mut out);
-        gb.drain_audio(&mut audio_buf);
+        core.drain_audio(&mut audio_buf);
         audio.push(&mut audio_buf);
         if !out.is_empty() {
             print!("{out}");
@@ -433,7 +466,7 @@ fn run_game(
 
         frames += 1;
         if frames % 300 == 0 {
-            flush_save(&gb, sav, &mut last_saved); // every ~5 seconds
+            flush_save(&core, sav, &mut last_saved); // every ~5 seconds
         }
 
         next_frame += FRAME_TIME;
@@ -444,6 +477,6 @@ fn run_game(
             next_frame = now; // fell behind: don't try to catch up in a burst
         }
     };
-    flush_save(&gb, sav, &mut last_saved);
+    flush_save(&core, sav, &mut last_saved);
     code
 }

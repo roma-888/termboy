@@ -89,10 +89,6 @@ impl GameBoy {
         self.cpu.bus.cycles
     }
 
-    /// Host audio sample rate (Hz). Default 48000.
-    pub fn set_audio_rate(&mut self, hz: u32) {
-        self.cpu.bus.apu.set_sample_rate(hz);
-    }
 }
 
 impl Core for GameBoy {
@@ -127,6 +123,10 @@ impl Core for GameBoy {
 
     fn drain_audio(&mut self, out: &mut Vec<(f32, f32)>) {
         out.append(&mut self.cpu.bus.apu.samples);
+    }
+
+    fn set_audio_rate(&mut self, hz: u32) {
+        self.cpu.bus.apu.set_sample_rate(hz);
     }
 }
 

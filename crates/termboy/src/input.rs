@@ -30,6 +30,8 @@ pub fn default_keymap() -> HashMap<KeyCode, Buttons> {
     m.insert(KeyCode::Char('z'), Buttons::B);
     m.insert(KeyCode::Tab, Buttons::SELECT);
     m.insert(KeyCode::Enter, Buttons::START);
+    m.insert(KeyCode::Char('a'), Buttons::L);
+    m.insert(KeyCode::Char('s'), Buttons::R);
     m
 }
 
@@ -66,6 +68,8 @@ pub fn parse_keys(spec: &str) -> Option<HashMap<KeyCode, Buttons>> {
             "down" => Buttons::DOWN,
             "left" => Buttons::LEFT,
             "right" => Buttons::RIGHT,
+            "l" => Buttons::L,
+            "r" => Buttons::R,
             _ => return None,
         };
         let code = key_from_name(key.trim())?;
@@ -185,6 +189,19 @@ mod tests {
         assert!(parse_keys("a=").is_none());
         assert!(parse_keys("warp=k").is_none());
         assert!(parse_keys("a=notakey").is_none());
+    }
+
+    #[test]
+    fn shoulder_buttons_default_and_remap() {
+        let mut input = Input::new(true, default_keymap());
+        let t0 = Instant::now();
+        input.handle(&press(KeyCode::Char('a')), t0);
+        input.handle(&press(KeyCode::Char('s')), t0);
+        let b = input.buttons(t0);
+        assert!(b.contains(Buttons::L) && b.contains(Buttons::R));
+        let m = parse_keys("l=q").unwrap();
+        assert_eq!(m[&KeyCode::Char('q')], Buttons::L);
+        assert!(!m.contains_key(&KeyCode::Char('a')));
     }
 
     #[test]

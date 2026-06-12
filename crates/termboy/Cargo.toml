@@ -6,5 +6,6 @@ edition.workspace = true
 [dependencies]
 termboy-core = { path = "../termboy-core" }
 termboy-gb = { path = "../termboy-gb" }
+termboy-gba = { path = "../termboy-gba" }
 crossterm = "0.29"
 cpal = "0.16"

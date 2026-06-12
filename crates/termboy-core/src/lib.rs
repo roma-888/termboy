@@ -50,6 +50,10 @@ pub trait Core {
     fn drain_audio(&mut self, out: &mut Vec<(f32, f32)>) {
         let _ = out;
     }
+    /// Host audio sample rate (Hz). Cores without audio ignore it.
+    fn set_audio_rate(&mut self, hz: u32) {
+        let _ = hz;
+    }
 }
 
 #[cfg(test)]
