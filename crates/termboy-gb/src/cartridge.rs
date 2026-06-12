@@ -10,6 +10,8 @@ use crate::mbc3::Mbc3;
 pub enum CartError {
     TooSmall,
     Unsupported { code: u8, name: &'static str },
+    /// Header claims no mapper but the ROM is too big to work without one.
+    BadDump { code: u8, size_kb: usize },
 }
 
 impl fmt::Display for CartError {
@@ -18,6 +20,13 @@ impl fmt::Display for CartError {
             CartError::TooSmall => write!(f, "ROM is too small to contain a cartridge header"),
             CartError::Unsupported { code, name } => {
                 write!(f, "{name} (header type {code:#04X}) is not yet supported")
+            }
+            CartError::BadDump { code, size_kb } => {
+                write!(
+                    f,
+                    "header type {code:#04X} declares no mapper, but the ROM is {size_kb} KB — \
+                     impossible on real hardware; this is likely a bad dump, try a clean ROM"
+                )
             }
         }
     }
@@ -52,8 +61,11 @@ pub(crate) fn ram_size(code: u8) -> usize {
     }
 }
 
+/// Mapper-less cartridge: types 0x00 (no RAM) and 0x08/0x09 (RAM, unbanked).
 struct RomOnly {
     rom: Vec<u8>,
+    ram: Vec<u8>,
+    battery: bool,
 }
 
 impl Mbc for RomOnly {
@@ -61,10 +73,26 @@ impl Mbc for RomOnly {
         self.rom.get(addr as usize).copied().unwrap_or(0xFF)
     }
     fn write_rom(&mut self, _addr: u16, _value: u8) {}
-    fn read_ram(&self, _addr: u16) -> u8 { 0xFF }
-    fn write_ram(&mut self, _addr: u16, _value: u8) {}
-    fn save(&self, _now: u64) -> Option<Vec<u8>> { None }
-    fn load(&mut self, _data: &[u8], _now: u64) {}
+    fn read_ram(&self, addr: u16) -> u8 {
+        if self.ram.is_empty() {
+            return 0xFF;
+        }
+        let i = (addr as usize - 0xA000) % self.ram.len();
+        self.ram[i]
+    }
+    fn write_ram(&mut self, addr: u16, value: u8) {
+        if !self.ram.is_empty() {
+            let i = (addr as usize - 0xA000) % self.ram.len();
+            self.ram[i] = value;
+        }
+    }
+    fn save(&self, _now: u64) -> Option<Vec<u8>> {
+        (self.battery && !self.ram.is_empty()).then(|| self.ram.clone())
+    }
+    fn load(&mut self, data: &[u8], _now: u64) {
+        let n = data.len().min(self.ram.len());
+        self.ram[..n].copy_from_slice(&data[..n]);
+    }
 }
 
 pub struct Cartridge {
@@ -83,7 +111,14 @@ impl Cartridge {
             return Err(CartError::TooSmall);
         }
         let mbc: Box<dyn Mbc> = match rom[0x147] {
-            0x00 => Box::new(RomOnly { rom }),
+            code @ (0x00 | 0x08 | 0x09) => {
+                if rom.len() > 0x8000 {
+                    return Err(CartError::BadDump { code, size_kb: rom.len() / 1024 });
+                }
+                let ram = vec![0; ram_size(rom[0x149])];
+                let battery = code == 0x09;
+                Box::new(RomOnly { rom, ram, battery })
+            }
             0x01..=0x03 => {
                 let (battery, ram) = (rom[0x147] == 0x03, ram_size(rom[0x149]));
                 Box::new(Mbc1::new(rom, ram, battery))
@@ -143,6 +178,38 @@ mod tests {
     fn unsupported_mapper_is_a_named_error() {
         let err = Cartridge::new(rom_with_mapper(0x19)).unwrap_err();
         assert!(err.to_string().contains("MBC5"));
+    }
+
+    #[test]
+    fn rom_ram_type_08_has_unbanked_ram() {
+        let mut rom = rom_with_mapper(0x08);
+        rom[0x149] = 0x02; // 8 KB RAM
+        let mut cart = Cartridge::new(rom).unwrap();
+        cart.write_ram(0xA042, 0x5A);
+        assert_eq!(cart.read_ram(0xA042), 0x5A);
+        assert!(cart.save(0).is_none()); // 0x08 has no battery
+    }
+
+    #[test]
+    fn rom_ram_battery_type_09_saves() {
+        let mut rom = rom_with_mapper(0x09);
+        rom[0x149] = 0x02;
+        let mut cart = Cartridge::new(rom).unwrap();
+        cart.write_ram(0xA000, 0x77);
+        let saved = cart.save(0).expect("battery");
+        let mut rom2 = rom_with_mapper(0x09);
+        rom2[0x149] = 0x02;
+        let mut cart2 = Cartridge::new(rom2).unwrap();
+        cart2.load(&saved, 0);
+        assert_eq!(cart2.read_ram(0xA000), 0x77);
+    }
+
+    #[test]
+    fn oversized_mapperless_rom_is_a_bad_dump_error() {
+        let mut rom = vec![0u8; 0x10000]; // 64 KB can't be mapper-less
+        rom[0x147] = 0x08;
+        let err = Cartridge::new(rom).unwrap_err();
+        assert!(err.to_string().contains("bad dump"));
     }
 
     #[test]
