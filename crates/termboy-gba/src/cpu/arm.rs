@@ -242,6 +242,14 @@ impl Cpu {
         let rn_i = ((op >> 16) & 0xF) as usize;
         let rn = self.regs.get(rn_i).wrapping_add(if rn_i == 15 && reg_shift { 4 } else { 0 });
         let c = self.regs.cpsr.flag(C) as u32;
+        // Undocumented "P" variants (CMPP/CMNP/TSTP/TEQP): a test op with
+        // rd=15 copies SPSR into CPSR — mode switch, no result, and notably
+        // NO pipeline flush (jsmolka arm tests 234/235).
+        if rd == 15 && (0x8..=0xB).contains(&opcode) {
+            let spsr = self.regs.spsr();
+            self.regs.write_cpsr(spsr);
+            return;
+        }
         // S with rd=15 means "restore CPSR from SPSR", not "compute flags"
         let set_flags = s && rd != 15;
         let result = match opcode {

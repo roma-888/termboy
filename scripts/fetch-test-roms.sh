@@ -32,3 +32,11 @@ mkdir -p "$dest/cgb-acid2"
 curl -sfL "https://github.com/mattcurrie/cgb-acid2/releases/download/v1.1/cgb-acid2.gbc" \
   -o "$dest/cgb-acid2/cgb-acid2.gbc"
 echo "fetched cgb-acid2/cgb-acid2.gbc"
+
+# --- GBA: jsmolka's CPU test ROMs (MIT, prebuilt in the repo) ---
+gba_base="https://github.com/jsmolka/gba-tests/raw/master"
+gba_dest="crates/termboy-gba/tests/roms"
+mkdir -p "$gba_dest"
+curl -sfL "$gba_base/arm/arm.gba" -o "$gba_dest/arm.gba"
+curl -sfL "$gba_base/thumb/thumb.gba" -o "$gba_dest/thumb.gba"
+echo "fetched gba-tests arm.gba + thumb.gba"

@@ -873,6 +873,21 @@ fn unimplemented_bios_function_panics_loudly() {
 }
 
 #[test]
+fn test_op_with_rd_15_restores_cpsr_from_spsr() {
+    // MSR CPSR_c, r0 (-> IRQ) ; MSR SPSR_fc, r2 ; CMPP pc, r0 (0xE15FF000)
+    // The undocumented "P" variants restore CPSR like exception returns do.
+    let mut cpu = cpu_with(&[0xE121_F000, 0xE169_F002, 0xE15F_F000]);
+    cpu.regs.set(0, 0x12);
+    cpu.regs.set(2, 0x4000_001F); // System mode with Z set
+    cpu.step();
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.cpsr.mode(), Mode::System);
+    assert!(cpu.regs.cpsr.flag(Z)); // flags came from SPSR, not the compare
+    assert_eq!(cpu.exec_addr(), 0x0800_000C); // fell through, no branch
+}
+
+#[test]
 fn mov_to_pc_branches() {
     let mut cpu = cpu_with(&[0xE3A0_F00C]); // MOV pc, #12
     cpu.step();

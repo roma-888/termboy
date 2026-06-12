@@ -6,3 +6,5 @@
 docs/superpowers/
 /roms/
 !crates/termboy-gb/tests/roms/**/*.gbc
+*.gba
+!crates/termboy-gba/tests/roms/*.gba
