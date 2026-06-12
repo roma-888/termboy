@@ -183,27 +183,143 @@ impl Cpu {
         self.regs.set(((op >> 8) & 7) as usize, v);
     }
 
-    // Formats 7-19 land in Tasks 13-14:
+    // ---- Format 7: load/store with register offset ----
     fn t_mem_reg(&mut self, op: u16) {
-        self.t_todo(op)
+        let addr = self
+            .regs
+            .get(((op >> 3) & 7) as usize)
+            .wrapping_add(self.regs.get(((op >> 6) & 7) as usize));
+        let rd = (op & 7) as usize;
+        match (op >> 10) & 3 {
+            0 => { let v = self.regs.get(rd); self.bus.write32(addr & !3, v); } // STR
+            1 => { let v = self.regs.get(rd); self.bus.write8(addr, v as u8); } // STRB
+            2 => {
+                // LDR
+                let v = self.load_rotated(addr);
+                self.bus.idle();
+                self.regs.set(rd, v);
+            }
+            _ => {
+                // LDRB
+                let v = self.bus.read8(addr) as u32;
+                self.bus.idle();
+                self.regs.set(rd, v);
+            }
+        }
     }
+
+    // ---- Format 8: load/store sign-extended byte/halfword ----
     fn t_mem_signed(&mut self, op: u16) {
-        self.t_todo(op)
+        let addr = self
+            .regs
+            .get(((op >> 3) & 7) as usize)
+            .wrapping_add(self.regs.get(((op >> 6) & 7) as usize));
+        let rd = (op & 7) as usize;
+        match (op >> 10) & 3 {
+            0 => {
+                // STRH
+                let v = self.regs.get(rd);
+                self.bus.write16(addr & !1, v as u16);
+            }
+            1 => {
+                // LDRSB
+                let v = self.bus.read8(addr) as i8 as i32 as u32;
+                self.bus.idle();
+                self.regs.set(rd, v);
+            }
+            2 => {
+                // LDRH (misaligned rotates, same as ARM)
+                let v = (self.bus.read16(addr & !1) as u32).rotate_right((addr & 1) * 8);
+                self.bus.idle();
+                self.regs.set(rd, v);
+            }
+            _ => {
+                // LDRSH (misaligned degrades to LDRSB)
+                let v = if addr & 1 != 0 {
+                    self.bus.read8(addr) as i8 as i32 as u32
+                } else {
+                    self.bus.read16(addr) as i16 as i32 as u32
+                };
+                self.bus.idle();
+                self.regs.set(rd, v);
+            }
+        }
     }
+
+    // ---- Format 9: load/store with 5-bit immediate offset ----
     fn t_mem_imm(&mut self, op: u16) {
-        self.t_todo(op)
+        let imm = ((op >> 6) & 0x1F) as u32;
+        let rb = self.regs.get(((op >> 3) & 7) as usize);
+        let rd = (op & 7) as usize;
+        let load = op & (1 << 11) != 0;
+        if op & (1 << 12) == 0 {
+            let addr = rb.wrapping_add(imm * 4);
+            if load {
+                let v = self.load_rotated(addr);
+                self.bus.idle();
+                self.regs.set(rd, v);
+            } else {
+                let v = self.regs.get(rd);
+                self.bus.write32(addr & !3, v);
+            }
+        } else {
+            let addr = rb.wrapping_add(imm);
+            if load {
+                let v = self.bus.read8(addr) as u32;
+                self.bus.idle();
+                self.regs.set(rd, v);
+            } else {
+                let v = self.regs.get(rd);
+                self.bus.write8(addr, v as u8);
+            }
+        }
     }
+
+    // ---- Format 10: load/store halfword, 5-bit immediate ----
     fn t_mem_half(&mut self, op: u16) {
-        self.t_todo(op)
+        let addr = self
+            .regs
+            .get(((op >> 3) & 7) as usize)
+            .wrapping_add((((op >> 6) & 0x1F) as u32) * 2);
+        let rd = (op & 7) as usize;
+        if op & (1 << 11) != 0 {
+            let v = (self.bus.read16(addr & !1) as u32).rotate_right((addr & 1) * 8);
+            self.bus.idle();
+            self.regs.set(rd, v);
+        } else {
+            let v = self.regs.get(rd);
+            self.bus.write16(addr & !1, v as u16);
+        }
     }
+
+    // ---- Format 11: SP-relative load/store ----
     fn t_mem_sp(&mut self, op: u16) {
-        self.t_todo(op)
+        let addr = self.regs.get(13).wrapping_add(((op & 0xFF) as u32) * 4);
+        let rd = ((op >> 8) & 7) as usize;
+        if op & (1 << 11) != 0 {
+            let v = self.load_rotated(addr);
+            self.bus.idle();
+            self.regs.set(rd, v);
+        } else {
+            let v = self.regs.get(rd);
+            self.bus.write32(addr & !3, v);
+        }
     }
+
+    // ---- Format 12: load address (ADD rd, pc/sp, #imm) ----
     fn t_load_addr(&mut self, op: u16) {
-        self.t_todo(op)
+        let base =
+            if op & (1 << 11) != 0 { self.regs.get(13) } else { self.regs.get(15) & !2 };
+        let v = base.wrapping_add(((op & 0xFF) as u32) * 4);
+        self.regs.set(((op >> 8) & 7) as usize, v);
     }
+
+    // ---- Format 13: ADD/SUB SP, #imm ----
     fn t_adjust_sp(&mut self, op: u16) {
-        self.t_todo(op)
+        let imm = ((op & 0x7F) as u32) * 4;
+        let sp = self.regs.get(13);
+        let sp = if op & (1 << 7) != 0 { sp.wrapping_sub(imm) } else { sp.wrapping_add(imm) };
+        self.regs.set(13, sp);
     }
     fn t_push_pop(&mut self, op: u16) {
         self.t_todo(op)

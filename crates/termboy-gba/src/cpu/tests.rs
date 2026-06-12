@@ -204,6 +204,88 @@ fn thumb_bx_back_to_arm() {
 }
 
 #[test]
+fn thumb_load_store_register_offset() {
+    // STR r0, [r1, r2] ; LDR r3, [r1, r2] ; STRB r0, [r1, r2] ; LDRB r3, [r1, r2]
+    let mut cpu = thumb_cpu_with(&[0x5088, 0x588B, 0x5488, 0x5C8B]);
+    cpu.regs.set(0, 0xAABB_CCDD);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.regs.set(2, 8);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(3), 0xAABB_CCDD);
+    cpu.regs.set(2, 16);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(3), 0xDD); // byte store/load
+}
+
+#[test]
+fn thumb_load_store_signed_halfword() {
+    // STRH r0, [r1, r2] ; LDRH r3, [r1, r2] ; LDRSB r4, [r1, r2] ; LDRSH r5, [r1, r2]
+    let mut cpu = thumb_cpu_with(&[0x5288, 0x5A8B, 0x568C, 0x5E8D]);
+    cpu.regs.set(0, 0x9_8765);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.regs.set(2, 4);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(3), 0x8765);
+    cpu.step();
+    assert_eq!(cpu.regs.get(4), 0x0000_0065);
+    cpu.step();
+    assert_eq!(cpu.regs.get(5), 0xFFFF_8765); // sign-extended
+}
+
+#[test]
+fn thumb_load_store_immediate_offsets() {
+    // STR r0, [r1, #4] ; LDR r2, [r1, #4] ; STRB r0, [r1, #1] ; LDRB r2, [r1, #1]
+    let mut cpu = thumb_cpu_with(&[0x6048, 0x684A, 0x7048, 0x784A]);
+    cpu.regs.set(0, 0x1234_5678);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(2), 0x1234_5678);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(2), 0x78);
+}
+
+#[test]
+fn thumb_halfword_immediate_and_sp_relative() {
+    // STRH r0, [r1, #2] ; LDRH r2, [r1, #2] ; STR r0, [sp, #4] ; LDR r3, [sp, #4]
+    let mut cpu = thumb_cpu_with(&[0x8048, 0x884A, 0x9001, 0x9B01]);
+    cpu.regs.set(0, 0xF00D_BEEF);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(2), 0xBEEF);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(3), 0xF00D_BEEF);
+}
+
+#[test]
+fn thumb_load_address_pc_and_sp() {
+    // ADD r0, pc, #4 ; ADD r1, sp, #4
+    let mut cpu = thumb_cpu_with(&[0xA001, 0xA901]);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x0800_0008); // (pc & !2) + 4
+    let sp = cpu.regs.get(13);
+    cpu.step();
+    assert_eq!(cpu.regs.get(1), sp + 4);
+}
+
+#[test]
+fn thumb_adjust_sp() {
+    // SUB sp, #16 ; ADD sp, #16
+    let mut cpu = thumb_cpu_with(&[0xB084, 0xB004]);
+    let sp = cpu.regs.get(13);
+    cpu.step();
+    assert_eq!(cpu.regs.get(13), sp - 16);
+    cpu.step();
+    assert_eq!(cpu.regs.get(13), sp);
+}
+
+#[test]
 fn thumb_pc_relative_load_word_aligns() {
     // at 0x08000000: LDR r0, [pc, #4] -> (0x08000004 & !2) + 4 = 0x08000008
     let mut cpu = thumb_cpu_with(&[0x4801, 0, 0, 0, 0x5544, 0x7766]);
