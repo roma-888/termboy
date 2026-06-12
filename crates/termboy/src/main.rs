@@ -4,6 +4,7 @@
 //! `--headless` runs without UI and streams serial output (debug tool).
 
 mod input;
+mod menu;
 mod screen;
 
 use std::io::Write as _;
@@ -20,12 +21,15 @@ use termboy_core::{Buttons, Core, Rgb};
 use termboy_gb::{DMG_GREEN, GameBoy};
 
 const USAGE: &str = "\
-usage: termboy [options] <rom.gb>
+usage: termboy [options] [rom.gb]
+
+with no rom argument, termboy opens a game picker for ./roms (or .)
 
 options:
   --palette <name>   green (default), gray, pocket, or four hex colors
                      lightest-to-darkest: '#e0f8d0,#88c070,#346856,#081820'
   --exact            require a 160x72 terminal instead of auto-scaling
+  --keys <spec>      'swap' (A/B swapped) or per-button: 'a=k,b=j,start=space'
   --headless         run without UI, print serial output (debug tool)
   -h, --help         show this help
 
@@ -134,21 +138,26 @@ fn main() -> ExitCode {
     let headless = args.iter().any(|a| a == "--headless");
     let exact = args.iter().any(|a| a == "--exact");
     let mut palette = DMG_GREEN;
+    let mut keymap = input::default_keymap();
     let mut rom_arg: Option<&str> = None;
     let mut it = args.iter().peekable();
     while let Some(arg) = it.next() {
-        let name = if let Some(n) = arg.strip_prefix("--palette=") {
-            Some(n.to_string())
+        let (flag, value) = if let Some(n) = arg.strip_prefix("--palette=") {
+            ("palette", Some(n.to_string()))
         } else if arg == "--palette" {
-            it.next().cloned()
+            ("palette", it.next().cloned())
+        } else if let Some(n) = arg.strip_prefix("--keys=") {
+            ("keys", Some(n.to_string()))
+        } else if arg == "--keys" {
+            ("keys", it.next().cloned())
         } else {
             if !arg.starts_with('-') {
                 rom_arg = Some(arg);
             }
-            None
+            ("", None)
         };
-        if let Some(name) = name {
-            match parse_palette(&name) {
+        match (flag, value) {
+            ("palette", Some(name)) => match parse_palette(&name) {
                 Some(p) => palette = p,
                 None => {
                     eprintln!(
@@ -157,36 +166,92 @@ fn main() -> ExitCode {
                     );
                     return ExitCode::FAILURE;
                 }
-            }
+            },
+            ("keys", Some(spec)) => match input::parse_keys(&spec) {
+                Some(m) => keymap = m,
+                None => {
+                    eprintln!("error: bad --keys spec {spec:?} — try 'swap' or 'a=k,b=j,start=space'");
+                    return ExitCode::FAILURE;
+                }
+            },
+            _ => {}
         }
     }
-    let Some(path) = rom_arg else {
-        eprintln!("{USAGE}");
-        return ExitCode::FAILURE;
-    };
-    let rom = match std::fs::read(path) {
-        Ok(rom) => rom,
-        Err(e) => {
-            eprintln!("error: cannot read {path}: {e}");
-            return ExitCode::FAILURE;
+    match rom_arg {
+        Some(path) => {
+            let (gb, sav) = match load_game(path, palette) {
+                Ok(pair) => pair,
+                Err(msg) => {
+                    eprintln!("error: {msg}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if headless {
+                run_headless(gb, &sav)
+            } else {
+                run_terminal(gb, exact, &sav, keymap)
+            }
         }
-    };
-    let mut gb = match GameBoy::new(rom) {
-        Ok(gb) => gb,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::FAILURE;
+        None if headless => {
+            eprintln!("{USAGE}");
+            ExitCode::FAILURE
         }
-    };
+        None => run_menu(palette, exact, keymap),
+    }
+}
+
+fn load_game(path: &str, palette: [Rgb; 4]) -> Result<(GameBoy, PathBuf), String> {
+    let rom = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let mut gb = GameBoy::new(rom).map_err(|e| e.to_string())?;
     gb.set_palette(palette);
     let sav = sav_path(path);
     if let Ok(data) = std::fs::read(&sav) {
         gb.load_ram(&data);
     }
-    if headless {
-        run_headless(gb, &sav)
-    } else {
-        run_terminal(gb, exact, &sav)
+    Ok((gb, sav))
+}
+
+/// No-arg mode: one terminal session hosting picker -> game -> picker.
+fn run_menu(
+    palette: [Rgb; 4],
+    exact: bool,
+    keymap: std::collections::HashMap<crossterm::event::KeyCode, termboy_core::Buttons>,
+) -> ExitCode {
+    let rom_dir = if Path::new("roms").is_dir() { Path::new("roms") } else { Path::new(".") };
+    let roms = menu::scan_roms(rom_dir);
+    if roms.is_empty() {
+        eprintln!("no .gb/.gbc files found in {}", rom_dir.display());
+        return ExitCode::FAILURE;
+    }
+    install_panic_hook();
+    let guard = match TerminalGuard::enter() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: cannot enter raw mode: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    loop {
+        let Some(i) = menu::pick(&roms) else {
+            return ExitCode::SUCCESS;
+        };
+        let path = roms[i].to_string_lossy().into_owned();
+        match load_game(&path, palette) {
+            Ok((gb, sav)) => {
+                let mut input = input::Input::new(guard.enhanced, keymap.clone());
+                let mut screen = screen::Screen::new(160, 144);
+                print!("\x1b[2J");
+                run_game(gb, exact, &sav, &mut input, &mut screen);
+                // Esc in-game returns here: back to the picker.
+            }
+            Err(msg) => {
+                // show the error in the picker session briefly
+                print!("\x1b[2J\x1b[H\x1b[0merror: {msg}\r\n\r\npress any key");
+                use std::io::Write as _;
+                std::io::stdout().flush().ok();
+                let _ = event::read();
+            }
+        }
     }
 }
 
@@ -249,11 +314,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn run_terminal(mut gb: GameBoy, exact: bool, sav: &Path) -> ExitCode {
-    let mut screen = screen::Screen::new(160, 144);
-    let (need_cols, need_rows) = screen.required_size();
-    let mut last_size = (0u16, 0u16);
-
+fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = execute!(
@@ -264,7 +325,15 @@ fn run_terminal(mut gb: GameBoy, exact: bool, sav: &Path) -> ExitCode {
         let _ = terminal::disable_raw_mode();
         default_hook(info);
     }));
+}
 
+fn run_terminal(
+    gb: GameBoy,
+    exact: bool,
+    sav: &Path,
+    keymap: std::collections::HashMap<crossterm::event::KeyCode, termboy_core::Buttons>,
+) -> ExitCode {
+    install_panic_hook();
     let guard = match TerminalGuard::enter() {
         Ok(g) => g,
         Err(e) => {
@@ -272,7 +341,22 @@ fn run_terminal(mut gb: GameBoy, exact: bool, sav: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut input = input::Input::new(guard.enhanced);
+    let mut input = input::Input::new(guard.enhanced, keymap);
+    let mut screen = screen::Screen::new(160, 144);
+    run_game(gb, exact, sav, &mut input, &mut screen)
+}
+
+/// Run one game until Esc. Assumes raw mode + alternate screen are active.
+fn run_game(
+    mut gb: GameBoy,
+    exact: bool,
+    sav: &Path,
+    input: &mut input::Input,
+    screen: &mut screen::Screen,
+) -> ExitCode {
+    let (need_cols, need_rows) = screen.required_size();
+    let mut last_size = (0u16, 0u16);
+    screen.invalidate();
 
     let mut out = String::new();
     let mut next_frame = Instant::now();

@@ -14,7 +14,9 @@ library. MBC1/MBC3/MBC5 with battery saves (`<rom>.sav`, auto-flushed) and the
 MBC3 real-time clock. Blargg cpu_instrs + instr_timing, dmg-acid2 AND
 cgb-acid2 (both pixel-exact vs official references) all pass.
 
-- `cargo run --release -p termboy -- <rom.gb>` — play a ROM in any truecolor terminal (pixel-perfect at 160x72+, auto-scaled to fit below that; `--exact` disables scaling)
+- `cargo run --release -p termboy` — opens a game picker for `./roms` (no argument needed)
+- `cargo run --release -p termboy -- <rom.gb>` — play a ROM directly (pixel-perfect at 160x72+, auto-scaled to fit below that; `--exact` disables scaling)
+- `--keys swap` (A/B swapped) or `--keys a=k,b=j,start=space` for custom bindings
 - `--palette green|gray|pocket` or four hex colors (`--palette '#e0f8d0,#88c070,#346856,#081820'`)
 - `cargo run --release -p termboy -- --headless <rom.gb>` — run headless, print serial output
 - `cargo test --workspace` — full test suite including hardware test ROMs
