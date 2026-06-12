@@ -101,10 +101,67 @@ impl Cpu {
         self.regs.set(rdlo, result as u32);
     }
     fn arm_swap(&mut self, op: u32) {
-        self.todo(op)
+        let addr = self.regs.get(((op >> 16) & 0xF) as usize);
+        let rm = self.regs.get((op & 0xF) as usize);
+        let rd = ((op >> 12) & 0xF) as usize;
+        let old = if op & (1 << 22) != 0 {
+            let v = self.bus.read8(addr) as u32;
+            self.bus.write8(addr, rm as u8);
+            v
+        } else {
+            let v = self.load_rotated(addr);
+            self.bus.write32(addr & !3, rm);
+            v
+        };
+        self.bus.idle();
+        self.regs.set(rd, old);
     }
+
     fn arm_halfword_transfer(&mut self, op: u32) {
-        self.todo(op)
+        let p = op & (1 << 24) != 0;
+        let u = op & (1 << 23) != 0;
+        let w = op & (1 << 21) != 0;
+        let l = op & (1 << 20) != 0;
+        let rn = ((op >> 16) & 0xF) as usize;
+        let rd = ((op >> 12) & 0xF) as usize;
+        // bit 22: immediate (split nibbles) vs register offset
+        let offset = if op & (1 << 22) != 0 {
+            ((op >> 4) & 0xF0) | (op & 0xF)
+        } else {
+            self.regs.get((op & 0xF) as usize)
+        };
+        let base = self.regs.get(rn);
+        let offset_addr = if u { base.wrapping_add(offset) } else { base.wrapping_sub(offset) };
+        let addr = if p { offset_addr } else { base };
+        if l {
+            let value = match (op >> 5) & 3 {
+                1 => (self.bus.read16(addr & !1) as u32).rotate_right((addr & 1) * 8), // LDRH
+                2 => self.bus.read8(addr) as i8 as i32 as u32,                         // LDRSB
+                _ => {
+                    // LDRSH; misaligned degrades to LDRSB on ARM7
+                    if addr & 1 != 0 {
+                        self.bus.read8(addr) as i8 as i32 as u32
+                    } else {
+                        self.bus.read16(addr) as i16 as i32 as u32
+                    }
+                }
+            };
+            self.bus.idle();
+            if !p || w {
+                self.regs.set(rn, offset_addr);
+            }
+            self.regs.set(rd, value);
+            if rd == 15 {
+                self.flush();
+            }
+        } else {
+            // STRH (SH=01 is the only store form that reaches here)
+            let value = self.regs.get(rd).wrapping_add(if rd == 15 { 4 } else { 0 });
+            self.bus.write16(addr & !1, value as u16);
+            if !p || w {
+                self.regs.set(rn, offset_addr);
+            }
+        }
     }
     fn arm_mrs(&mut self, op: u32) {
         let v = if op & (1 << 22) != 0 { self.regs.spsr().0 } else { self.regs.cpsr.0 };
@@ -219,7 +276,49 @@ impl Cpu {
         }
     }
     fn arm_single_transfer(&mut self, op: u32) {
-        self.todo(op)
+        let p = op & (1 << 24) != 0;
+        let u = op & (1 << 23) != 0;
+        let b = op & (1 << 22) != 0;
+        let w = op & (1 << 21) != 0;
+        let l = op & (1 << 20) != 0;
+        let rn = ((op >> 16) & 0xF) as usize;
+        let rd = ((op >> 12) & 0xF) as usize;
+        let offset = if op & (1 << 25) != 0 {
+            // register offset shifted by immediate; never flag-setting
+            let ty = (op >> 5) & 3;
+            let amount = (op >> 7) & 0x1F;
+            let value = self.regs.get((op & 0xF) as usize);
+            self.shift(ty, value, amount, true).0
+        } else {
+            op & 0xFFF
+        };
+        let base = self.regs.get(rn);
+        let offset_addr = if u { base.wrapping_add(offset) } else { base.wrapping_sub(offset) };
+        let addr = if p { offset_addr } else { base };
+        if l {
+            let value =
+                if b { self.bus.read8(addr) as u32 } else { self.load_rotated(addr) };
+            self.bus.idle();
+            // post-index always writes back; rd wins over writeback when equal
+            if !p || w {
+                self.regs.set(rn, offset_addr);
+            }
+            self.regs.set(rd, value);
+            if rd == 15 {
+                self.flush();
+            }
+        } else {
+            // STR of r15 stores PC+12 on ARM7
+            let value = self.regs.get(rd).wrapping_add(if rd == 15 { 4 } else { 0 });
+            if b {
+                self.bus.write8(addr, value as u8);
+            } else {
+                self.bus.write32(addr & !3, value);
+            }
+            if !p || w {
+                self.regs.set(rn, offset_addr);
+            }
+        }
     }
     fn arm_block_transfer(&mut self, op: u32) {
         self.todo(op)

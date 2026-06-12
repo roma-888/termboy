@@ -207,6 +207,13 @@ impl Cpu {
         }
     }
 
+    /// Word load with the ARM7 misalignment behavior: aligned fetch, then
+    /// rotate so the addressed byte lands in the low lane.
+    pub(crate) fn load_rotated(&mut self, addr: u32) -> u32 {
+        let value = self.bus.read32(addr & !3);
+        value.rotate_right((addr & 3) * 8)
+    }
+
     // exec_thumb lives in thumb.rs (Task 12); stub so the step loop compiles:
     pub(crate) fn exec_thumb(&mut self, op: u16) {
         unimplemented!("thumb opcode {op:#06X} at {:#010X}", self.exec_addr())

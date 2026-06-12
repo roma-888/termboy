@@ -341,6 +341,120 @@ fn umlal_accumulates() {
 }
 
 #[test]
+fn ldr_str_basic_and_writeback() {
+    // STR r0, [r1, #4]! ; LDR r2, [r1], #4
+    let mut cpu = cpu_with(&[0xE5A1_0004, 0xE491_2004]);
+    cpu.regs.set(0, 0xCAFE_F00D);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.step();
+    assert_eq!(cpu.bus.read32(0x0200_0004), 0xCAFE_F00D);
+    assert_eq!(cpu.regs.get(1), 0x0200_0004); // pre-index writeback
+    cpu.step();
+    assert_eq!(cpu.regs.get(2), 0xCAFE_F00D);
+    assert_eq!(cpu.regs.get(1), 0x0200_0008); // post-index writeback
+}
+
+#[test]
+fn ldr_misaligned_rotates() {
+    let mut cpu = cpu_with(&[0xE591_0000]); // LDR r0, [r1]
+    cpu.bus.write32(0x0200_0000, 0x1122_3344);
+    cpu.regs.set(1, 0x0200_0001);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x4411_2233);
+}
+
+#[test]
+fn ldrb_strb() {
+    // STRB r0, [r1] ; LDRB r2, [r1]
+    let mut cpu = cpu_with(&[0xE5C1_0000, 0xE5D1_2000]);
+    cpu.regs.set(0, 0x1234_56AB);
+    cpu.regs.set(1, 0x0200_0003);
+    cpu.step();
+    cpu.step();
+    assert_eq!(cpu.regs.get(2), 0xAB);
+}
+
+#[test]
+fn ldr_with_shifted_register_offset() {
+    let mut cpu = cpu_with(&[0xE791_0102]); // LDR r0, [r1, r2, LSL #2]
+    cpu.bus.write32(0x0200_0010, 0x5555_AAAA);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.regs.set(2, 4);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x5555_AAAA);
+}
+
+#[test]
+fn str_pc_stores_plus_12() {
+    let mut cpu = cpu_with(&[0xE581_F000]); // STR pc, [r1]
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.step();
+    assert_eq!(cpu.bus.read32(0x0200_0000), 0x0800_000C);
+}
+
+#[test]
+fn ldr_into_pc_branches() {
+    let mut cpu = cpu_with(&[0xE591_F000]); // LDR pc, [r1]
+    cpu.bus.write32(0x0200_0000, 0x0800_0100);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.step();
+    assert_eq!(cpu.exec_addr(), 0x0800_0100);
+}
+
+#[test]
+fn ldrh_and_misalignment() {
+    // LDRH r0, [r1] ; LDRH r0, [r2]
+    let mut cpu = cpu_with(&[0xE1D1_00B0, 0xE1D2_00B0]);
+    cpu.bus.write32(0x0200_0000, 0x8000_FFEE);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.regs.set(2, 0x0200_0001); // misaligned: halfword rotated by 8
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0xFFEE);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0xEE00_00FF);
+}
+
+#[test]
+fn ldrsb_and_ldrsh_sign_extend() {
+    // LDRSB r0, [r1] ; LDRSH r2, [r1] ; LDRSH r3, [r4]  (r4 misaligned)
+    let mut cpu = cpu_with(&[0xE1D1_00D0, 0xE1D1_20F0, 0xE1D4_30F0]);
+    cpu.bus.write16(0x0200_0000, 0x80FE);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.regs.set(4, 0x0200_0001);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0xFFFF_FFFE); // byte 0xFE sign-extended
+    cpu.step();
+    assert_eq!(cpu.regs.get(2), 0xFFFF_80FE); // halfword sign-extended
+    cpu.step();
+    assert_eq!(cpu.regs.get(3), 0xFFFF_FF80); // misaligned LDRSH acts as LDRSB
+}
+
+#[test]
+fn strh_with_immediate_offset() {
+    let mut cpu = cpu_with(&[0xE1C1_00B2]); // STRH r0, [r1, #2]
+    cpu.regs.set(0, 0x1234_BEEF);
+    cpu.regs.set(1, 0x0200_0000);
+    cpu.step();
+    assert_eq!(cpu.bus.read16(0x0200_0002), 0xBEEF);
+}
+
+#[test]
+fn swp_word_and_byte() {
+    // SWP r0, r1, [r2] ; SWPB r3, r4, [r2]
+    let mut cpu = cpu_with(&[0xE102_0091, 0xE142_3094]);
+    cpu.bus.write32(0x0200_0000, 0x0BAD_F00D);
+    cpu.regs.set(1, 0x1111_1111);
+    cpu.regs.set(2, 0x0200_0000);
+    cpu.regs.set(4, 0xEE);
+    cpu.step();
+    assert_eq!(cpu.regs.get(0), 0x0BAD_F00D);
+    assert_eq!(cpu.bus.read32(0x0200_0000), 0x1111_1111);
+    cpu.step();
+    assert_eq!(cpu.regs.get(3), 0x11);
+    assert_eq!(cpu.bus.read32(0x0200_0000), 0x1111_11EE);
+}
+
+#[test]
 fn mov_to_pc_branches() {
     let mut cpu = cpu_with(&[0xE3A0_F00C]); // MOV pc, #12
     cpu.step();
