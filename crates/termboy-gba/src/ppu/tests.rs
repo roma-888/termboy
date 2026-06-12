@@ -197,6 +197,72 @@ fn text_bg_512_wide_uses_second_screen_block() {
 }
 
 #[test]
+fn affine_bg_identity_renders_8bpp_map() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0402); // mode 2, BG2
+    b.write16(0x0400_000C, 0x0000); // BG2CNT: 128x128, char/screen base 0
+    b.write16(0x0500_000E, 0x001F); // palette index 7 = red
+    // affine map: one byte per entry; entry (1,0) = tile 1
+    b.write8(0x0600_0000, 0x01); // byte-write quirk duplicates: entries 0+1
+    b.write8(0x0600_0002, 0x00); // clear entries 2+3 back (only 0/1 = tile 1)
+    // 8bpp tile 1, all pixels index 7
+    for i in 0..32 {
+        b.write16(0x0600_0000 + 64 + i * 2, 0x0707);
+    }
+    // entry 0 must be tile 0: rewrite the halfword precisely
+    b.write16(0x0600_0000, 0x0100); // entry 0 = 0x00, entry 1 = 0x01
+    // identity matrix: PA=PD=1.0 (0x100), PB=PC=0
+    b.write16(0x0400_0020, 0x0100);
+    b.write16(0x0400_0026, 0x0100);
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[8], 0x001F); // x 8-15 = tile (1,0)
+    assert_eq!(b.ppu.frame[0], 0x0000); // tile (0,0) = tile 0 = blank
+}
+
+#[test]
+fn affine_bg_scale_and_reference_point() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0402);
+    b.write16(0x0400_000C, 0x0000);
+    b.write16(0x0500_000E, 0x001F);
+    b.write16(0x0600_0000, 0x0100); // map entry 1 = tile 1
+    for i in 0..32 {
+        b.write16(0x0600_0000 + 64 + i * 2, 0x0707);
+    }
+    b.write16(0x0400_0020, 0x0200); // PA = 2.0: texture moves 2px per screen px
+    b.write16(0x0400_0026, 0x0100);
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[4], 0x001F); // screen x4 -> texture x8
+    assert_eq!(b.ppu.frame[8], 0x0000); // screen x8 -> texture x16: blank
+    // reference point: start texture at (8,0) -> tile shows from screen x0
+    b.write32(0x0400_0028, 8 << 8); // BG2X = 8.0 (write relatches)
+    b.write16(0x0400_0020, 0x0100); // PA back to 1.0
+    render_line(&mut b, 1); // next line picks up the relatch
+    assert_eq!(b.ppu.frame[WIDTH], 0x001F); // screen x0 -> texture x8
+}
+
+#[test]
+fn affine_bg_wrap_bit() {
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x0402);
+    b.write16(0x0500_000E, 0x001F);
+    b.write16(0x0600_0000, 0x0100); // map entry 1 = tile 1
+    for i in 0..32 {
+        b.write16(0x0600_0000 + 64 + i * 2, 0x0707);
+    }
+    b.write16(0x0400_0020, 0x0100);
+    b.write16(0x0400_0026, 0x0100);
+    b.write32(0x0400_0028, (-8i32 << 8) as u32); // start 8px left of the map
+    b.write16(0x0400_000C, 0x0000); // no wrap: out-of-map = transparent
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x0000);
+    b.write32(0x0400_0028, (-120i32 << 8) as u32); // wraps to texture x=8
+    b.write16(0x0400_000C, 0x2000); // wrap bit
+    render_line(&mut b, 1);
+    assert_eq!(b.ppu.frame[WIDTH], 0x001F);
+}
+
+#[test]
 fn mode5_small_bitmap_with_backdrop_border() {
     let mut b = bus();
     set_dispcnt(&mut b, 0x0405); // mode 5, BG2, page 0

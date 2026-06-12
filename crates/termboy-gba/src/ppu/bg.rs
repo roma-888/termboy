@@ -57,9 +57,55 @@ impl Bus {
         }
     }
 
-    /// `enabled` still matters when off: the internal reference point
-    /// advances every scanline regardless (Task 5).
+    /// Affine BG (BG2/BG3). Renders into bg_line when `enabled`; the internal
+    /// reference point advances by PB/PD per scanline either way.
     pub(crate) fn render_affine_bg(&mut self, bg: usize, line: usize, enabled: bool) {
-        let _ = (bg, line, enabled); // Task 5
+        let slot = bg - 2;
+        let reg_base = 0x020 + slot * 0x10;
+        if self.ppu.bg_ref_dirty[slot] || line == 0 {
+            let sext28 = |v: u32| ((v << 4) as i32) >> 4;
+            self.ppu.bg_ref[slot] = (
+                sext28(self.io32(0x028 + slot * 0x10)),
+                sext28(self.io32(0x02C + slot * 0x10)),
+            );
+            self.ppu.bg_ref_dirty[slot] = false;
+        }
+        let pa = self.io16(reg_base) as i16 as i32;
+        let pb = self.io16(reg_base + 2) as i16 as i32;
+        let pc = self.io16(reg_base + 4) as i16 as i32;
+        let pd = self.io16(reg_base + 6) as i16 as i32;
+        let (ref_x, ref_y) = self.ppu.bg_ref[slot];
+
+        if enabled {
+            let cnt = self.io16(0x008 + bg * 2);
+            let char_base = ((cnt >> 2) & 3) as usize * 0x4000;
+            let screen_base = ((cnt >> 8) & 0x1F) as usize * 0x800;
+            let size_tiles = 16usize << ((cnt >> 14) & 3); // 16..128 tiles square
+            let size_px = (size_tiles * 8) as i32;
+            let wrap = cnt & (1 << 13) != 0;
+            let (mut cx, mut cy) = (ref_x, ref_y);
+            for x in 0..WIDTH {
+                let (mut sx, mut sy) = (cx >> 8, cy >> 8);
+                cx += pa;
+                cy += pc;
+                if wrap {
+                    sx = sx.rem_euclid(size_px);
+                    sy = sy.rem_euclid(size_px);
+                } else if sx < 0 || sx >= size_px || sy < 0 || sy >= size_px {
+                    continue;
+                }
+                let (sx, sy) = (sx as usize, sy as usize);
+                let tile =
+                    self.vram[(screen_base + (sy / 8) * size_tiles + sx / 8) & 0xFFFF] as usize;
+                let idx = self.vram[(char_base + tile * 64 + (sy & 7) * 8 + (sx & 7)) & 0xFFFF]
+                    as usize;
+                if idx != 0 {
+                    self.ppu.bg_line[bg][x] = self.palette16(idx);
+                }
+            }
+        }
+        // advance the internal reference to the next scanline
+        self.ppu.bg_ref[slot].0 = ref_x + pb;
+        self.ppu.bg_ref[slot].1 = ref_y + pd;
     }
 }

@@ -209,6 +209,15 @@ impl Bus {
         let reg = (addr as usize) & 0x3FF;
         match reg {
             0x202 | 0x203 => self.io[reg] &= !value, // IF: write-1-to-acknowledge
+            // BG2X/Y, BG3X/Y: writing relatches the affine reference point
+            0x028..=0x02F => {
+                self.io[reg] = value;
+                self.ppu.bg_ref_dirty[0] = true;
+            }
+            0x038..=0x03F => {
+                self.io[reg] = value;
+                self.ppu.bg_ref_dirty[1] = true;
+            }
             _ => self.io[reg] = value,
         }
     }
