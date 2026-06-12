@@ -4,6 +4,7 @@
 pub mod bios;
 pub mod bus;
 pub mod cpu;
+pub mod dma;
 pub mod keypad;
 pub mod ppu;
 

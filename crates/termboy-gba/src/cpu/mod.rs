@@ -60,11 +60,13 @@ impl Cpu {
         self.flushed = true;
     }
 
-    /// One whole-system tick: run one instruction (or idle while halted),
-    /// then deliver timing events and any pending interrupt. DMA preemption
-    /// is added in the DMA task.
+    /// One whole-system tick: service DMA if any channel is pending, else
+    /// run one instruction (or idle while halted), then deliver timing
+    /// events and any pending interrupt.
     pub fn step_system(&mut self) {
-        if self.bus.halted {
+        if let Some(ch) = self.bus.dma_ready() {
+            self.bus.run_dma(ch);
+        } else if self.bus.halted {
             self.bus.idle();
         } else {
             self.step();

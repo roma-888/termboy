@@ -24,6 +24,7 @@ pub struct Bus {
     pub cycles: u64,
     /// Number of timing events processed (2 per line: start, hblank).
     events_done: u64,
+    pub(crate) dma: [crate::dma::Dma; 4],
     /// Set by HALTCNT / the Halt SWI; cleared when IE & IF intersect.
     pub halted: bool,
 }
@@ -43,6 +44,7 @@ impl Bus {
             ppu: crate::ppu::Ppu::new(),
             cycles: 0,
             events_done: 0,
+            dma: [crate::dma::Dma::default(); 4],
             halted: false,
         }
     }
@@ -64,8 +66,11 @@ impl Bus {
                 if line == self.io[0x005] as u64 && dispstat & (1 << 5) != 0 {
                     self.raise_irq(1 << 2); // VCOUNT match
                 }
-                if line == VBLANK_START && dispstat & (1 << 3) != 0 {
-                    self.raise_irq(1 << 0);
+                if line == VBLANK_START {
+                    if dispstat & (1 << 3) != 0 {
+                        self.raise_irq(1 << 0);
+                    }
+                    self.dma_on_vblank();
                 }
             } else {
                 if dispstat & (1 << 4) != 0 {
@@ -76,6 +81,7 @@ impl Bus {
                     if line == VBLANK_START - 1 {
                         self.ppu.frame_ready = true;
                     }
+                    self.dma_on_hblank(); // hblank DMA pauses during vblank
                 }
             }
         }
@@ -262,6 +268,13 @@ impl Bus {
         let reg = (addr as usize) & 0x3FF;
         match reg {
             0x202 | 0x203 => self.io[reg] &= !value, // IF: write-1-to-acknowledge
+            // DMA control bytes: latch on the enable rising edge
+            0x0BA | 0x0BB | 0x0C6 | 0x0C7 | 0x0D2 | 0x0D3 | 0x0DE | 0x0DF => {
+                let ch = (reg - 0x0B0) / 0xC;
+                let was = self.io[0x0BB + ch * 0xC] & 0x80 != 0;
+                self.io[reg] = value;
+                self.dma_ctrl_write(ch, was);
+            }
             // HALTCNT: any write halts (bit 7 = Stop, same thing at coarse timing)
             0x301 => {
                 self.io[reg] = value;
