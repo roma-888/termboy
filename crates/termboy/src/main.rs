@@ -358,9 +358,18 @@ impl TerminalGuard {
             terminal::Clear(terminal::ClearType::All)
         )?;
         if enhanced {
+            // REPORT_EVENT_TYPES alone gives press/release for keys already sent
+            // as escape sequences (arrows) and printable keys, but legacy keys
+            // (Enter, Tab, Esc, Backspace) keep their byte encoding and never emit
+            // release events — so START/SELECT never clear in the held model.
+            // REPORT_ALL_KEYS_AS_ESCAPE_CODES forces every key into CSI-u so they
+            // all report press/repeat/release uniformly.
             execute!(
                 std::io::stdout(),
-                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                )
             )?;
         }
         Ok(Self { enhanced })
