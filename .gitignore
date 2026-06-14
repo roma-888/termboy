@@ -4,7 +4,9 @@
 *.sav
 !crates/termboy-gb/tests/roms/**/*.gb
 docs/superpowers/
-/roms/
+# Track the roms/ folder (placeholder README) but never the ROMs/saves in it.
+/roms/*
+!/roms/README.md
 !crates/termboy-gb/tests/roms/**/*.gbc
 *.gba
 !crates/termboy-gba/tests/roms/*.gba
