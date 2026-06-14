@@ -2,7 +2,7 @@
 
 A Game Boy, Game Boy Color, and Game Boy Advance emulator that runs in your terminal.
 
-![dmg-acid2 rendered by termboy](assets/dmg-acid2.png)
+![cgb-acid2 rendered pixel-exact by termboy](assets/cgb-acid2.png)
 
 Written in Rust. Three emulation cores share one frontend — a half-block terminal
 renderer with auto-scaling, a ROM picker grouped by hardware, configurable input,
@@ -51,3 +51,28 @@ Input feels best in a terminal supporting the kitty keyboard protocol
 (Ghostty, kitty, WezTerm, recent iTerm2/Alacritty) — real key-release events.
 Elsewhere termboy falls back to timed release driven by OS key repeat; for a
 snappier hold, reduce your OS key-repeat delay.
+
+## Display & sharpness
+
+termboy draws with half-block characters (each cell is one pixel wide and two
+tall) and auto-scales the image to fit your terminal. When the terminal has at
+least as many character cells as the console's native size — 160×72 for
+GB/GBC, 240×80 for GBA — the picture is pixel-perfect; below that it's
+box-filter downscaled, which looks softer.
+
+If the image looks blurry, **zoom the terminal out** (⌘− / Ctrl−, a smaller
+font) so there are enough cells for pixel-perfect rendering; **zoom in** (⌘+ /
+Ctrl+) to make the picture physically larger at the cost of sharpness. In other
+words, font size *is* your resolution dial.
+
+## Test ROMs & credits
+
+The freely redistributable test ROMs under `crates/*/tests/roms/` are not
+termboy's work:
+
+- Game Boy CPU/timing — [Blargg's gb-test-roms](https://github.com/retrio/gb-test-roms) (`cargo`-fetched by `scripts/fetch-test-roms.sh`)
+- PPU accuracy — [dmg-acid2 and cgb-acid2](https://github.com/mattcurrie/dmg-acid2) by Matt Currie (the banner above is termboy's cgb-acid2 output)
+- GBA CPU + PPU — [jsmolka's gba-tests](https://github.com/jsmolka/gba-tests) (`arm`, `thumb`, `shades`, `stripes`)
+
+Commercial ROMs and save files are git-ignored and never committed; bring your
+own and drop them in `./roms`.
