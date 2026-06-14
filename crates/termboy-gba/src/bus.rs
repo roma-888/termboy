@@ -93,9 +93,29 @@ impl Bus {
         }
     }
 
-    /// Frontend input, pre-encoded as KEYINPUT bits. KEYCNT IRQs land in G4.
+    /// Frontend input, pre-encoded as KEYINPUT bits.
     pub fn set_buttons(&mut self, buttons: termboy_core::Buttons) {
         self.keyinput = crate::keypad::keyinput(buttons);
+        self.check_keypad_irq();
+    }
+
+    /// KEYCNT: raise the keypad IRQ when the selected keys are down
+    /// (bit 15 chooses OR / AND across the selection).
+    fn check_keypad_irq(&mut self) {
+        let keycnt = self.io16(0x132);
+        if keycnt & (1 << 14) == 0 {
+            return;
+        }
+        let sel = keycnt & 0x3FF;
+        let down = !self.keyinput & 0x3FF;
+        let hit = if keycnt & (1 << 15) != 0 {
+            sel != 0 && down & sel == sel
+        } else {
+            down & sel != 0
+        };
+        if hit {
+            self.raise_irq(1 << 12);
+        }
     }
 
     /// One internal (non-memory) cycle.
@@ -277,6 +297,13 @@ impl Bus {
         let reg = (addr as usize) & 0x3FF;
         match reg {
             0x202 | 0x203 => self.io[reg] &= !value, // IF: write-1-to-acknowledge
+            // KEYCNT: a new selection can match the keys already held. Only
+            // the high byte (written last in a 16-bit store) triggers the
+            // check, so a half-written register never matches transiently.
+            0x133 => {
+                self.io[reg] = value;
+                self.check_keypad_irq();
+            }
             // Timer control: settle the old configuration first, then latch
             // the reload into the counter on an enable rising edge
             0x102 | 0x106 | 0x10A | 0x10E => {
@@ -473,6 +500,30 @@ mod tests {
         b.cycles = 42 * 1232;
         b.catch_up();
         assert_eq!(b.read16(0x0400_0202) & 4, 4);
+    }
+
+    #[test]
+    fn keypad_irq_or_and_and_modes() {
+        use termboy_core::Buttons;
+        let mut b = bus();
+        b.write16(0x0400_0132, (1 << 14) | 0x0003); // IRQ on A or B
+        b.set_buttons(Buttons::B);
+        assert_eq!(b.read16(0x0400_0202) & (1 << 12), 1 << 12);
+        b.write16(0x0400_0202, 1 << 12); // acknowledge
+        b.write16(0x0400_0132, (1 << 14) | (1 << 15) | 0x0003); // A AND B
+        b.set_buttons(Buttons::A);
+        assert_eq!(b.read16(0x0400_0202), 0);
+        b.set_buttons(Buttons::A.with(Buttons::B));
+        assert_eq!(b.read16(0x0400_0202) & (1 << 12), 1 << 12);
+    }
+
+    #[test]
+    fn keypad_irq_needs_the_enable_bit() {
+        use termboy_core::Buttons;
+        let mut b = bus();
+        b.write16(0x0400_0132, 0x03FF); // all keys selected, IRQ disabled
+        b.set_buttons(Buttons::START);
+        assert_eq!(b.read16(0x0400_0202), 0);
     }
 
     #[test]
