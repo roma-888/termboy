@@ -33,6 +33,8 @@ impl Cpu {
             0x0B => self.cpu_set(),
             0x0C => self.cpu_fast_set(),
             0x0D => self.regs.set(0, 0xBAAE_187F), // GetBiosChecksum
+            0x0E => self.bg_affine_set(),
+            0x0F => self.obj_affine_set(),
             0x10 => self.bit_unpack(),
             0x11 => {
                 let d = self.lz77_decompress();
@@ -238,6 +240,54 @@ impl Cpu {
                     out_bits = 0;
                 }
                 bit += src_w;
+            }
+        }
+    }
+
+    /// BgAffineSet: src entries of {ox.8, oy.8: i32, cx, cy: i16,
+    /// sx.8, sy.8: i16, theta: u16} -> {pa..pd, x0, y0} (mGBA's HLE math).
+    fn bg_affine_set(&mut self) {
+        let mut src = self.regs.get(0);
+        let mut dst = self.regs.get(1);
+        for _ in 0..self.regs.get(2) {
+            let ox = self.bus.read32(src) as i32 as f64 / 256.0;
+            let oy = self.bus.read32(src.wrapping_add(4)) as i32 as f64 / 256.0;
+            let cx = self.bus.read16(src.wrapping_add(8)) as i16 as f64;
+            let cy = self.bus.read16(src.wrapping_add(10)) as i16 as f64;
+            let sx = self.bus.read16(src.wrapping_add(12)) as i16 as f64 / 256.0;
+            let sy = self.bus.read16(src.wrapping_add(14)) as i16 as f64 / 256.0;
+            let theta = (self.bus.read16(src.wrapping_add(16)) >> 8) as f64
+                * (std::f64::consts::PI / 128.0);
+            src = src.wrapping_add(20);
+            let (sin, cos) = theta.sin_cos();
+            let (a, b, c, d) = (sx * cos, -sx * sin, sy * sin, sy * cos);
+            let x0 = ox - (a * cx + b * cy);
+            let y0 = oy - (c * cx + d * cy);
+            for (off, v) in [(0u32, a), (2, b), (4, c), (6, d)] {
+                self.bus.write16(dst.wrapping_add(off), (v * 256.0) as i32 as u16);
+            }
+            self.bus.write32(dst.wrapping_add(8), (x0 * 256.0) as i32 as u32);
+            self.bus.write32(dst.wrapping_add(12), (y0 * 256.0) as i32 as u32);
+            dst = dst.wrapping_add(16);
+        }
+    }
+
+    /// ObjAffineSet: {sx.8, sy.8, theta, pad} entries; pa-pd written r3
+    /// bytes apart (2 = packed, 8 = interleaved into OAM).
+    fn obj_affine_set(&mut self) {
+        let mut src = self.regs.get(0);
+        let mut dst = self.regs.get(1);
+        let stride = self.regs.get(3);
+        for _ in 0..self.regs.get(2) {
+            let sx = self.bus.read16(src) as i16 as f64 / 256.0;
+            let sy = self.bus.read16(src.wrapping_add(2)) as i16 as f64 / 256.0;
+            let theta = (self.bus.read16(src.wrapping_add(4)) >> 8) as f64
+                * (std::f64::consts::PI / 128.0);
+            src = src.wrapping_add(8);
+            let (sin, cos) = theta.sin_cos();
+            for v in [sx * cos, -sx * sin, sy * sin, sy * cos] {
+                self.bus.write16(dst, (v * 256.0) as i32 as u16);
+                dst = dst.wrapping_add(stride);
             }
         }
     }
@@ -604,6 +654,46 @@ mod tests {
         cpu.regs.set(1, dst);
         cpu.step();
         cpu
+    }
+
+    #[test]
+    fn bg_affine_set_identity_and_rotation() {
+        let mut cpu = cpu_with(&[0xEF0E_0000]);
+        // ox=100.0, oy=20.0, cx=100, cy=20, sx=sy=1.0, theta=0
+        cpu.bus.write32(0x0200_0000, 100 << 8);
+        cpu.bus.write32(0x0200_0004, 20 << 8);
+        cpu.bus.write16(0x0200_0008, 100);
+        cpu.bus.write16(0x0200_000A, 20);
+        cpu.bus.write16(0x0200_000C, 0x100);
+        cpu.bus.write16(0x0200_000E, 0x100);
+        cpu.bus.write16(0x0200_0010, 0);
+        cpu.regs.set(0, 0x0200_0000);
+        cpu.regs.set(1, 0x0200_1000);
+        cpu.regs.set(2, 1);
+        cpu.step();
+        assert_eq!(cpu.bus.read16(0x0200_1000), 0x100); // pa
+        assert_eq!(cpu.bus.read16(0x0200_1002), 0); // pb
+        assert_eq!(cpu.bus.read16(0x0200_1004), 0); // pc
+        assert_eq!(cpu.bus.read16(0x0200_1006), 0x100); // pd
+        assert_eq!(cpu.bus.read32(0x0200_1008), 0); // x0 = ox - cx
+        assert_eq!(cpu.bus.read32(0x0200_100C), 0); // y0
+    }
+
+    #[test]
+    fn obj_affine_set_90_degrees_with_oam_stride() {
+        let mut cpu = cpu_with(&[0xEF0F_0000]);
+        cpu.bus.write16(0x0200_0000, 0x100); // sx = 1.0
+        cpu.bus.write16(0x0200_0002, 0x100); // sy = 1.0
+        cpu.bus.write16(0x0200_0004, 0x4000); // theta = 90 deg
+        cpu.regs.set(0, 0x0200_0000);
+        cpu.regs.set(1, 0x0200_1000);
+        cpu.regs.set(2, 1);
+        cpu.regs.set(3, 8); // OAM stride
+        cpu.step();
+        assert_eq!(cpu.bus.read16(0x0200_1000), 0); // pa = cos90
+        assert_eq!(cpu.bus.read16(0x0200_1008), 0xFF00); // pb = -sin90 = -1.0
+        assert_eq!(cpu.bus.read16(0x0200_1010), 0x100); // pc = sin90
+        assert_eq!(cpu.bus.read16(0x0200_1018), 0); // pd
     }
 
     #[test]
