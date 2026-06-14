@@ -16,7 +16,9 @@ pub struct Bus {
     pub palette: Box<[u8; 0x400]>,
     pub vram: Box<[u8; 0x1_8000]>,
     pub oam: Box<[u8; 0x400]>,
-    sram: Box<[u8; 0x1_0000]>,
+    /// Cartridge save memory. G4 ships Flash (what Pokémon probes for);
+    /// SRAM/EEPROM detection and .sav persistence land in G5.
+    flash: crate::flash::Flash,
     /// Frontend input, pre-encoded as KEYINPUT bits (active low).
     keyinput: u16,
     pub ppu: crate::ppu::Ppu,
@@ -42,7 +44,7 @@ impl Bus {
             palette: Box::new([0; 0x400]),
             vram: Box::new([0; 0x1_8000]),
             oam: Box::new([0; 0x400]),
-            sram: Box::new([0xFF; 0x1_0000]),
+            flash: crate::flash::Flash::new(),
             keyinput: 0x03FF,
             ppu: crate::ppu::Ppu::new(),
             cycles: 0,
@@ -156,7 +158,7 @@ impl Bus {
                 // address bus, i.e. (addr/2) as a stream of halfwords.
                 self.rom.get(i).copied().unwrap_or(((addr >> 1) >> ((addr & 1) * 8)) as u8)
             }
-            0x0E | 0x0F => self.sram[(addr as usize) & 0xFFFF],
+            0x0E | 0x0F => self.flash.read(addr),
             _ => 0,
         }
     }
@@ -200,7 +202,7 @@ impl Bus {
             0x05 => self.palette[(addr as usize) & 0x3FF] = value,
             0x06 => self.vram[Self::vram_index(addr)] = value,
             0x07 => self.oam[(addr as usize) & 0x3FF] = value,
-            0x0E | 0x0F => self.sram[(addr as usize) & 0xFFFF] = value,
+            0x0E | 0x0F => self.flash.write(addr, value),
             _ => {} // BIOS and ROM are read-only; unmapped writes vanish
         }
     }
