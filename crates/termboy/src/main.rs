@@ -224,7 +224,11 @@ fn is_gba(path: &str) -> bool {
 
 fn load_gba(path: &str) -> Result<GbaCore, String> {
     let rom = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-    GbaCore::new(rom)
+    let mut core = GbaCore::new(rom)?;
+    if let Ok(data) = std::fs::read(sav_path(path)) {
+        core.load_ram(&data);
+    }
+    Ok(core)
 }
 
 fn load_game(path: &str, palette: [Rgb; 4]) -> Result<(GameBoy, PathBuf), String> {
