@@ -39,6 +39,15 @@ impl GbaCore {
     pub fn cycles(&self) -> u64 {
         self.cpu.bus.cycles
     }
+
+    /// Test/debug: drive a raw byte access to the save region.
+    pub fn debug_write8(&mut self, addr: u32, value: u8) {
+        self.cpu.bus.write8(addr, value);
+    }
+
+    pub fn debug_read8(&mut self, addr: u32) -> u8 {
+        self.cpu.bus.read8(addr)
+    }
 }
 
 impl Core for GbaCore {
@@ -58,8 +67,10 @@ impl Core for GbaCore {
     }
 
     fn save_ram(&self) -> Option<Vec<u8>> {
-        None // cartridge save types (SRAM/Flash/EEPROM) land in G5
+        self.cpu.bus.save.backup()
     }
 
-    fn load_ram(&mut self, _data: &[u8]) {}
+    fn load_ram(&mut self, data: &[u8]) {
+        self.cpu.bus.save.restore(data);
+    }
 }

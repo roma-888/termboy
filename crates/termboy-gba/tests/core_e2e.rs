@@ -45,7 +45,29 @@ fn rejects_undersized_rom() {
 }
 
 #[test]
-fn no_save_ram_until_g5() {
+fn flash_save_round_trips_through_save_and_load_ram() {
+    // a ROM that declares 128KB flash so detection picks Flash(M1)
+    let mut rom = pixel_rom();
+    rom.resize(0x400, 0);
+    rom[0x200..0x209].copy_from_slice(b"FLASH1M_V");
+
+    let mut core = GbaCore::new(rom.clone()).unwrap();
+    // JEDEC program of 0x5A at flash offset 0x40: AA/55/A0 then the byte
+    core.debug_write8(0x0E00_5555, 0xAA);
+    core.debug_write8(0x0E00_2AAA, 0x55);
+    core.debug_write8(0x0E00_5555, 0xA0);
+    core.debug_write8(0x0E00_0040, 0x5A);
+    let saved = core.save_ram().expect("flash cart has a save");
+    assert_eq!(saved.len(), 0x2_0000);
+    assert_eq!(saved[0x40], 0x5A);
+
+    let mut fresh = GbaCore::new(rom).unwrap();
+    fresh.load_ram(&saved);
+    assert_eq!(fresh.debug_read8(0x0E00_0040), 0x5A);
+}
+
+#[test]
+fn cart_without_save_signature_has_no_save_ram() {
     let core = GbaCore::new(pixel_rom()).unwrap();
     assert!(core.save_ram().is_none());
 }
