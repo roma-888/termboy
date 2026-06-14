@@ -34,6 +34,26 @@ impl Cpu {
             0x0C => self.cpu_fast_set(),
             0x0D => self.regs.set(0, 0xBAAE_187F), // GetBiosChecksum
             0x10 => self.bit_unpack(),
+            0x11 => {
+                let d = self.lz77_decompress();
+                self.write_out_bytes(&d);
+            }
+            0x12 => {
+                let d = self.lz77_decompress();
+                self.write_out_halfwords(&d);
+            }
+            0x13 => self.huff_decompress(),
+            0x14 => {
+                let d = self.rl_decompress();
+                self.write_out_bytes(&d);
+            }
+            0x15 => {
+                let d = self.rl_decompress();
+                self.write_out_halfwords(&d);
+            }
+            0x16 => self.diff8_unfilter(false),
+            0x17 => self.diff8_unfilter(true),
+            0x18 => self.diff16_unfilter(),
             0x19 => {} // SoundBias: no APU until G6
             // The BIOS-resident sound driver: m4a games carry their own copy
             // in ROM and never call these (except MidiKey2Freq below).
@@ -219,6 +239,170 @@ impl Cpu {
                 }
                 bit += src_w;
             }
+        }
+    }
+
+    /// GBA LZ77 (type-1 header): flag byte then 8 blocks, MSB first;
+    /// a set bit is a (len 3-18, disp 1-4096) back-reference. Inflated into
+    /// a Vec first so back-references never read half-written memory.
+    fn lz77_decompress(&mut self) -> Vec<u8> {
+        let mut src = self.regs.get(0);
+        let size = (self.bus.read32(src) >> 8) as usize;
+        src = src.wrapping_add(4);
+        let mut out = Vec::with_capacity(size);
+        while out.len() < size {
+            let flags = self.bus.read8(src);
+            src = src.wrapping_add(1);
+            for i in (0..8).rev() {
+                if out.len() >= size {
+                    break;
+                }
+                if flags & (1 << i) == 0 {
+                    out.push(self.bus.read8(src));
+                    src = src.wrapping_add(1);
+                } else {
+                    let b0 = self.bus.read8(src) as usize;
+                    let b1 = self.bus.read8(src.wrapping_add(1)) as usize;
+                    src = src.wrapping_add(2);
+                    let len = (b0 >> 4) + 3;
+                    let disp = ((b0 & 0xF) << 8 | b1) + 1;
+                    for _ in 0..len {
+                        if out.len() >= size {
+                            break;
+                        }
+                        let v = out[out.len() - disp];
+                        out.push(v);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// GBA RLE (type-3 header): bit 7 of the flag byte picks run/literal.
+    fn rl_decompress(&mut self) -> Vec<u8> {
+        let mut src = self.regs.get(0);
+        let size = (self.bus.read32(src) >> 8) as usize;
+        src = src.wrapping_add(4);
+        let mut out = Vec::with_capacity(size);
+        while out.len() < size {
+            let f = self.bus.read8(src) as usize;
+            src = src.wrapping_add(1);
+            if f & 0x80 != 0 {
+                let v = self.bus.read8(src);
+                src = src.wrapping_add(1);
+                for _ in 0..(f & 0x7F) + 3 {
+                    out.push(v);
+                }
+            } else {
+                for _ in 0..(f & 0x7F) + 1 {
+                    out.push(self.bus.read8(src));
+                    src = src.wrapping_add(1);
+                }
+            }
+        }
+        out.truncate(size);
+        out
+    }
+
+    /// HuffUnComp: 4/8-bit symbols; tree of (offset, leaf-flag) nodes after
+    /// the size byte; the bitstream is consumed as 32-bit words, MSB first.
+    fn huff_decompress(&mut self) {
+        let src = self.regs.get(0);
+        let header = self.bus.read32(src);
+        let sym_bits = header & 0xF;
+        let size = (header >> 8) as usize;
+        let tree_base = src.wrapping_add(4);
+        let tree_size = self.bus.read8(tree_base) as u32;
+        let mut stream = tree_base.wrapping_add((tree_size + 1) * 2);
+        let root = tree_base.wrapping_add(1);
+        let mut out: Vec<u8> = Vec::with_capacity(size);
+        let mut node = root;
+        let mut nibble: Option<u8> = None;
+        'outer: while out.len() < size {
+            let word = self.bus.read32(stream);
+            stream = stream.wrapping_add(4);
+            for i in (0..32).rev() {
+                let nv = self.bus.read8(node) as u32;
+                let bit = (word >> i) & 1;
+                let next = (node & !1).wrapping_add(((nv & 0x3F) + 1) * 2).wrapping_add(bit);
+                let leaf = if bit == 0 { nv & 0x80 != 0 } else { nv & 0x40 != 0 };
+                if !leaf {
+                    node = next;
+                    continue;
+                }
+                let sym = self.bus.read8(next);
+                node = root;
+                if sym_bits == 8 {
+                    out.push(sym);
+                } else {
+                    match nibble.take() {
+                        None => nibble = Some(sym),
+                        Some(lo) => out.push(lo | (sym << 4)),
+                    }
+                }
+                if out.len() >= size {
+                    break 'outer;
+                }
+            }
+        }
+        let mut dst = self.regs.get(1);
+        for chunk in out.chunks(4) {
+            let mut w = [0u8; 4];
+            w[..chunk.len()].copy_from_slice(chunk);
+            self.bus.write32(dst, u32::from_le_bytes(w));
+            dst = dst.wrapping_add(4);
+        }
+    }
+
+    fn diff8_unfilter(&mut self, vram: bool) {
+        let src = self.regs.get(0);
+        let size = (self.bus.read32(src) >> 8) as usize;
+        let mut s = src.wrapping_add(4);
+        let mut out = Vec::with_capacity(size);
+        let mut acc: u8 = 0;
+        for _ in 0..size {
+            acc = acc.wrapping_add(self.bus.read8(s));
+            s = s.wrapping_add(1);
+            out.push(acc);
+        }
+        if vram {
+            self.write_out_halfwords(&out);
+        } else {
+            self.write_out_bytes(&out);
+        }
+    }
+
+    fn diff16_unfilter(&mut self) {
+        let src = self.regs.get(0);
+        let size = (self.bus.read32(src) >> 8) as usize;
+        let mut s = src.wrapping_add(4);
+        let mut dst = self.regs.get(1) & !1;
+        let mut acc: u16 = 0;
+        for _ in 0..size / 2 {
+            acc = acc.wrapping_add(self.bus.read16(s));
+            s = s.wrapping_add(2);
+            self.bus.write16(dst, acc);
+            dst = dst.wrapping_add(2);
+        }
+    }
+
+    fn write_out_bytes(&mut self, data: &[u8]) {
+        let mut dst = self.regs.get(1);
+        for &b in data {
+            self.bus.write8(dst, b);
+            dst = dst.wrapping_add(1);
+        }
+    }
+
+    /// VRAM-safe flavor: byte stores to VRAM duplicate through the bus
+    /// quirk, so emit halfwords.
+    fn write_out_halfwords(&mut self, data: &[u8]) {
+        let mut dst = self.regs.get(1) & !1;
+        for pair in data.chunks(2) {
+            let v = u16::from_le_bytes([pair[0], *pair.get(1).unwrap_or(&0)]);
+            self.bus.write16(dst, v);
+            dst = dst.wrapping_add(2);
         }
     }
 
@@ -408,6 +592,66 @@ mod tests {
         cpu.step();
         // LSB-first: set bits become 1+1=2, clear bits stay 0 (no zero flag)
         assert_eq!(cpu.bus.read32(0x0200_1000), 0x2000_0002);
+    }
+
+    /// Place `blob` in EWRAM at 0x02000000 and run SWI `f` with dst as given.
+    fn unpack(f: u32, blob: &[u8], dst: u32) -> Cpu {
+        let mut cpu = cpu_with(&[0xEF00_0000 | (f << 16)]);
+        for (i, &b) in blob.iter().enumerate() {
+            cpu.bus.write8(0x0200_0000 + i as u32, b);
+        }
+        cpu.regs.set(0, 0x0200_0000);
+        cpu.regs.set(1, dst);
+        cpu.step();
+        cpu
+    }
+
+    #[test]
+    fn lz77_literal_plus_backreference() {
+        // "AB" then a len-4 disp-2 backref => "ABABAB"
+        let blob = [0x10, 6, 0, 0, 0b0010_0000, b'A', b'B', 0x10, 0x01];
+        let mut cpu = unpack(0x11, &blob, 0x0200_1000);
+        for (i, c) in b"ABABAB".iter().enumerate() {
+            assert_eq!(cpu.bus.read8(0x0200_1000 + i as u32), *c);
+        }
+        // the Vram flavor writes the same bytes, halfword-wise, into VRAM
+        let mut cpu = unpack(0x12, &blob, 0x0600_0000);
+        assert_eq!(cpu.bus.read16(0x0600_0000), u16::from_le_bytes([b'A', b'B']));
+        assert_eq!(cpu.bus.read16(0x0600_0004), u16::from_le_bytes([b'A', b'B']));
+    }
+
+    #[test]
+    fn rl_run_and_literal() {
+        // run of five 0x7C, then two literals
+        let blob = [0x30, 7, 0, 0, 0x82, 0x7C, 0x01, b'x', b'y'];
+        let mut cpu = unpack(0x14, &blob, 0x0200_1000);
+        assert_eq!(cpu.bus.read8(0x0200_1004), 0x7C);
+        assert_eq!(cpu.bus.read8(0x0200_1005), b'x');
+        assert_eq!(cpu.bus.read8(0x0200_1006), b'y');
+    }
+
+    #[test]
+    fn huffman_8bit_two_symbol_tree() {
+        // header: 8-bit symbols, type 2, size 4; tree: size byte 1,
+        // root (both children leaves, offset 0), leaves 'A' and 'B';
+        // stream: one word, bits MSB-first: 0,1,1,0 -> "ABBA"
+        let blob = [
+            0x28, 4, 0, 0, // header
+            1, 0xC0, b'A', b'B', // tree
+            0x00, 0x00, 0x00, 0x60, // stream word 0x60000000 (LE)
+        ];
+        let mut cpu = unpack(0x13, &blob, 0x0200_1000);
+        assert_eq!(cpu.bus.read32(0x0200_1000), u32::from_le_bytes(*b"ABBA"));
+    }
+
+    #[test]
+    fn diff_filters_integrate() {
+        let blob8 = [0x80, 3, 0, 0, 1, 1, 1];
+        let mut cpu = unpack(0x16, &blob8, 0x0200_1000);
+        assert_eq!(cpu.bus.read8(0x0200_1002), 3);
+        let blob16 = [0x81, 4, 0, 0, 0x10, 0x00, 0x10, 0x00];
+        let mut cpu = unpack(0x18, &blob16, 0x0200_1000);
+        assert_eq!(cpu.bus.read16(0x0200_1002), 0x20);
     }
 
     #[test]
