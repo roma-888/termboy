@@ -71,8 +71,8 @@ outright. Speed resets to `1x` on the next game.
 
 Hold **Backspace** to rewind: termboy snapshots the machine a few times a second
 into a memory-bounded ring and replays them backward while held (audio muted).
-Release to resume from that point. The window is whatever fits a ~128 MB budget
-— minutes on GB/GBC, around half a minute on GBA — and resets per game.
+Release to resume from that point. The window is whatever fits a ~64 MB budget
+— minutes on GB/GBC, around ten seconds on GBA — and resets per game.
 
 Input feels best in a terminal supporting the kitty keyboard protocol
 (Ghostty, kitty, WezTerm, recent iTerm2/Alacritty) — real key-release events.

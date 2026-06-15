@@ -8,8 +8,11 @@ use std::collections::VecDeque;
 
 /// Frames between snapshots during normal play (~0.1s at 59.73 Hz).
 const INTERVAL: u32 = 6;
-/// RAM ceiling for the snapshot ring.
-const BUDGET_BYTES: usize = 128 * 1024 * 1024;
+/// RAM ceiling for the snapshot ring. 64 MiB keeps termboy's footprint modest
+/// while still giving a useful window — minutes on GB/GBC (tiny states), ~12 s
+/// on GBA (~0.5 MiB states). This is the bulk of the process's memory, so the
+/// cap is deliberately conservative.
+const BUDGET_BYTES: usize = 64 * 1024 * 1024;
 
 pub struct Rewind {
     ring: VecDeque<Vec<u8>>,
