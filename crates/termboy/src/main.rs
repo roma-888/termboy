@@ -565,6 +565,15 @@ impl TerminalGuard {
             cursor::Hide,
             terminal::Clear(terminal::ClearType::All)
         )?;
+        // Disable "alternate scroll" (DEC private mode 1007). On the alternate
+        // screen, terminals translate mouse-wheel/trackpad scrolling into arrow-
+        // key presses (so less/vim scroll with the wheel) — here that injects
+        // phantom D-pad Up/Down into the game. termboy takes no mouse input, so
+        // turn it off; Drop restores it. We never enable mouse capture, so this
+        // is the whole of the mouse story.
+        let mut o = std::io::stdout();
+        write!(o, "\x1b[?1007l")?;
+        o.flush()?;
         if enhanced {
             // REPORT_EVENT_TYPES alone gives press/release for keys already sent
             // as escape sequences (arrows) and printable keys, but legacy keys
@@ -586,6 +595,9 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        // Restore the alternate-scroll mode disabled in enter().
+        let _ = write!(std::io::stdout(), "\x1b[?1007h");
+        let _ = std::io::stdout().flush();
         if self.enhanced {
             let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
         }
