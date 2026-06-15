@@ -49,6 +49,25 @@ impl GbaCore {
     pub fn debug_read8(&mut self, addr: u32) -> u8 {
         self.cpu.bus.read8(addr)
     }
+
+    pub fn debug_write16(&mut self, addr: u32, value: u16) {
+        self.cpu.bus.write16(addr, value);
+    }
+
+    pub fn debug_read16(&mut self, addr: u32) -> u16 {
+        self.cpu.bus.read16(addr)
+    }
+
+    /// Program and immediately run a 16-bit immediate DMA3 (test helper).
+    pub fn debug_dma3(&mut self, src: u32, dst: u32, count: u16) {
+        self.cpu.bus.write32(0x0400_00D4, src);
+        self.cpu.bus.write32(0x0400_00D8, dst);
+        self.cpu.bus.write16(0x0400_00DC, count);
+        self.cpu.bus.write16(0x0400_00DE, 0x8000);
+        if let Some(ch) = self.cpu.bus.dma_ready() {
+            self.cpu.bus.run_dma(ch);
+        }
+    }
 }
 
 impl Core for GbaCore {

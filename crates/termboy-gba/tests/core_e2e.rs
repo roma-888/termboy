@@ -71,3 +71,49 @@ fn cart_without_save_signature_has_no_save_ram() {
     let core = GbaCore::new(pixel_rom()).unwrap();
     assert!(core.save_ram().is_none());
 }
+
+#[test]
+fn eeprom_save_round_trips_through_save_and_load_ram() {
+    let mut rom = pixel_rom();
+    rom.resize(0x400, 0);
+    rom[0x200..0x208].copy_from_slice(b"EEPROM_V");
+
+    let write_cmd = |core: &mut GbaCore, addr: usize, data: u64| {
+        let mut bits = vec![1u8, 0];
+        for i in (0..6).rev() {
+            bits.push(((addr >> i) & 1) as u8);
+        }
+        for i in (0..64).rev() {
+            bits.push(((data >> i) & 1) as u8);
+        }
+        bits.push(0);
+        for (i, &b) in bits.iter().enumerate() {
+            core.debug_write16(0x0200_0000 + i as u32 * 2, b as u16);
+        }
+        core.debug_dma3(0x0200_0000, 0x0D00_0000, 73);
+    };
+
+    let mut core = GbaCore::new(rom.clone()).unwrap();
+    write_cmd(&mut core, 2, 0xCAFE_F00D_1234_5678);
+    let saved = core.save_ram().expect("eeprom cart has a save");
+    assert_eq!(saved.len(), 512);
+
+    // restore into a fresh core and read addr 2 back via DMA
+    let mut fresh = GbaCore::new(rom).unwrap();
+    fresh.load_ram(&saved);
+    let mut req = vec![1u8, 1];
+    for i in (0..6).rev() {
+        req.push(((2usize >> i) & 1) as u8);
+    }
+    req.push(0);
+    for (i, &b) in req.iter().enumerate() {
+        fresh.debug_write16(0x0200_0000 + i as u32 * 2, b as u16);
+    }
+    fresh.debug_dma3(0x0200_0000, 0x0D00_0000, 9);
+    fresh.debug_dma3(0x0D00_0000, 0x0200_0100, 68);
+    let mut got = 0u64;
+    for i in 4..68u32 {
+        got = (got << 1) | (fresh.debug_read16(0x0200_0100 + i * 2) & 1) as u64;
+    }
+    assert_eq!(got, 0xCAFE_F00D_1234_5678);
+}
