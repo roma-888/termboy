@@ -3,8 +3,15 @@ resolver = "3"
 members = ["crates/termboy-core", "crates/termboy-gb", "crates/termboy-gba", "crates/termboy"]
 
 [workspace.package]
+version = "0.3.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
+repository = "https://github.com/roma-888/termboy"
+homepage = "https://github.com/roma-888/termboy"
+readme = "README.md"
+keywords = ["gameboy", "emulator", "terminal", "gba", "gbc"]
+categories = ["emulators", "command-line-utilities", "games"]
 
 # Release builds are for playing: optimize hard. Emulators are dominated by many
 # tiny hot functions across module/crate boundaries (bus accesses inlined into

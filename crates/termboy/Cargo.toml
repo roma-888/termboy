@@ -1,12 +1,20 @@
 [package]
 name = "termboy"
-version = "0.2.2"
+description = "A Game Boy, Game Boy Color, and Game Boy Advance emulator that runs in your terminal."
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-termboy-core = { path = "../termboy-core" }
-termboy-gb = { path = "../termboy-gb" }
-termboy-gba = { path = "../termboy-gba" }
+termboy-core = { path = "../termboy-core", version = "0.3.0" }
+termboy-gb = { path = "../termboy-gb", version = "0.3.0" }
+termboy-gba = { path = "../termboy-gba", version = "0.3.0" }
 crossterm = "0.29"
 cpal = "0.16"
 miniz_oxide = "0.8" # zlib for the kitty graphics protocol's o=z compression

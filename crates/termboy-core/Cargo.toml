@@ -1,4 +1,12 @@
 [package]
 name = "termboy-core"
-version = "0.2.2"
+description = "Shared core abstractions (save-state serialization, framebuffer) for the termboy terminal emulator."
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true

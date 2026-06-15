@@ -1,7 +1,15 @@
 [package]
 name = "termboy-gb"
-version = "0.2.2"
+description = "Game Boy and Game Boy Color emulation core (CPU, PPU, APU, MBC mappers) behind termboy."
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-termboy-core = { path = "../termboy-core" }
+termboy-core = { path = "../termboy-core", version = "0.3.0" }

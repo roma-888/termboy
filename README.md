@@ -9,6 +9,43 @@ renderer (with true full-color images on kitty-graphics terminals) and
 auto-scaling, a ROM picker grouped by hardware, configurable input, audio,
 battery saves, save-state slots, adjustable play speed, and rewind.
 
+<!-- Demo recording — regenerate with `vhs assets/demo.tape` (see that file). -->
+![termboy demo](assets/demo.gif)
+
+## Install
+
+**From crates.io** (any platform with a Rust toolchain):
+
+```sh
+cargo install termboy
+```
+
+**Prebuilt binary** — download the tarball for your platform from the
+[latest release](https://github.com/roma-888/termboy/releases/latest), then:
+
+```sh
+tar xzf termboy-*-aarch64-apple-darwin.tar.gz   # match your platform
+install termboy-*/termboy /usr/local/bin/
+```
+
+Builds are published for macOS (Apple Silicon and Intel) and Linux (x86_64).
+
+**Homebrew** (macOS / Linux):
+
+```sh
+brew install roma-888/tap/termboy
+```
+
+**From source:**
+
+```sh
+git clone https://github.com/roma-888/termboy
+cd termboy && cargo run --release
+```
+
+Then run `termboy` to open the ROM picker for `./roms`, or `termboy <rom>` to
+play a file directly. Bring your own ROMs.
+
 ## Status
 
 **Game Boy / Game Boy Color — complete.** Full audio (all four APU channels) plays
