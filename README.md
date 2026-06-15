@@ -6,7 +6,7 @@ A Game Boy, Game Boy Color, and Game Boy Advance emulator that runs in your term
 
 Written in Rust. Three emulation cores share one frontend — a half-block terminal
 renderer with auto-scaling, a ROM picker grouped by hardware, configurable input,
-audio, and battery saves.
+audio, battery saves, save-state slots, adjustable play speed, and rewind.
 
 ## Status
 
