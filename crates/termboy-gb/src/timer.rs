@@ -1,5 +1,7 @@
 //! DIV/TIMA/TMA/TAC timer with the real falling-edge detector behavior.
 
+use termboy_core::state::{Reader, StateError, Writer};
+
 #[derive(Default)]
 pub struct Timer {
     counter: u16, // internal divider; DIV is the high byte
@@ -59,6 +61,25 @@ impl Timer {
     pub fn write_tima(&mut self, value: u8) {
         self.tima = value;
         self.overflow_delay = 0; // a write during the delay cancels the reload
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_u16(self.counter);
+        w.put_u8(self.tima);
+        w.put_u8(self.tma);
+        w.put_u8(self.tac);
+        w.put_bool(self.prev_bit);
+        w.put_u8(self.overflow_delay);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.counter = r.get_u16()?;
+        self.tima = r.get_u8()?;
+        self.tma = r.get_u8()?;
+        self.tac = r.get_u8()?;
+        self.prev_bit = r.get_bool()?;
+        self.overflow_delay = r.get_u8()?;
+        Ok(())
     }
 }
 

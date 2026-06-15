@@ -1,5 +1,6 @@
 //! P1 (0xFF00) button matrix. Select lines are active-low; pressed = 0.
 
+use termboy_core::state::{Reader, StateError, Writer};
 use termboy_core::Buttons;
 
 pub struct Joypad {
@@ -36,6 +37,15 @@ impl Joypad {
         let newly_pressed = buttons.0 & !self.buttons.0;
         self.buttons = buttons;
         newly_pressed != 0
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_u8(self.select);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.select = r.get_u8()?;
+        Ok(())
     }
 }
 

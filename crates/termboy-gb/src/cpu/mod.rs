@@ -5,6 +5,7 @@ mod tests;
 
 use crate::bus::Bus;
 use registers::Registers;
+use termboy_core::state::{Reader, StateError, Writer};
 
 pub struct Cpu {
     pub regs: Registers,
@@ -103,5 +104,24 @@ impl Cpu {
         let hi = self.read8(self.regs.sp);
         self.regs.sp = self.regs.sp.wrapping_add(1);
         u16::from_le_bytes([lo, hi])
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        self.regs.serialize(w);
+        w.put_bool(self.ime);
+        w.put_bool(self.ime_pending);
+        w.put_bool(self.halted);
+        w.put_bool(self.halt_bug);
+        self.bus.serialize(w);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.regs.deserialize(r)?;
+        self.ime = r.get_bool()?;
+        self.ime_pending = r.get_bool()?;
+        self.halted = r.get_bool()?;
+        self.halt_bug = r.get_bool()?;
+        self.bus.deserialize(r)?;
+        Ok(())
     }
 }

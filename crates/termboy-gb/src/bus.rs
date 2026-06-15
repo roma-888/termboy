@@ -8,6 +8,7 @@ use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
 use crate::timer::Timer;
+use termboy_core::state::{Reader, StateError, Writer};
 
 pub const IF_VBLANK: u8 = 0x01;
 pub const IF_STAT: u8 = 0x02;
@@ -266,6 +267,57 @@ impl Bus {
             0xFF70 if self.cgb => self.svbk = value & 7,
             _ => {}
         }
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_bytes(&self.wram[..]);
+        w.put_u8(self.svbk);
+        w.put_u8(self.vbk);
+        w.put_bool(self.key1_armed);
+        w.put_bool(self.double_speed);
+        w.put_bytes(&self.hram);
+        self.timer.serialize(w);
+        self.serial.serialize(w);
+        self.joypad.serialize(w);
+        self.apu.serialize(w);
+        w.put_u8(self.intf);
+        w.put_u8(self.inte);
+        w.put_u64(self.cycles);
+        w.put_u16(self.dma_src);
+        w.put_u8(self.dma_idx);
+        w.put_u8(self.dma_reg);
+        w.put_u16(self.hdma_src);
+        w.put_u16(self.hdma_dst);
+        w.put_u8(self.hdma_len);
+        w.put_bool(self.hdma_active);
+        self.ppu.serialize(w);
+        self.cart.serialize(w);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.wram.copy_from_slice(r.get_bytes(0x8000)?);
+        self.svbk = r.get_u8()?;
+        self.vbk = r.get_u8()?;
+        self.key1_armed = r.get_bool()?;
+        self.double_speed = r.get_bool()?;
+        self.hram.copy_from_slice(r.get_bytes(0x7F)?);
+        self.timer.deserialize(r)?;
+        self.serial.deserialize(r)?;
+        self.joypad.deserialize(r)?;
+        self.apu.deserialize(r)?;
+        self.intf = r.get_u8()?;
+        self.inte = r.get_u8()?;
+        self.cycles = r.get_u64()?;
+        self.dma_src = r.get_u16()?;
+        self.dma_idx = r.get_u8()?;
+        self.dma_reg = r.get_u8()?;
+        self.hdma_src = r.get_u16()?;
+        self.hdma_dst = r.get_u16()?;
+        self.hdma_len = r.get_u8()?;
+        self.hdma_active = r.get_bool()?;
+        self.ppu.deserialize(r)?;
+        self.cart.deserialize(r)?;
+        Ok(())
     }
 }
 

@@ -2,6 +2,7 @@
 //! 16 RAM banks, battery. The standard GBC-era mapper.
 
 use crate::cartridge::Mbc;
+use termboy_core::state::{Reader, StateError, Writer};
 
 pub(crate) struct Mbc5 {
     rom: Vec<u8>,
@@ -69,6 +70,22 @@ impl Mbc for Mbc5 {
     fn load(&mut self, data: &[u8], _now: u64) {
         let n = data.len().min(self.ram.len());
         self.ram[..n].copy_from_slice(&data[..n]);
+    }
+
+    fn serialize(&self, w: &mut Writer) {
+        w.put_bytes(&self.ram);
+        w.put_bool(self.ram_enable);
+        w.put_u16(self.rom_bank);
+        w.put_u8(self.ram_bank);
+    }
+
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        let n = self.ram.len();
+        self.ram.copy_from_slice(r.get_bytes(n)?);
+        self.ram_enable = r.get_bool()?;
+        self.rom_bank = r.get_u16()?;
+        self.ram_bank = r.get_u8()?;
+        Ok(())
     }
 }
 

@@ -2,6 +2,7 @@
 //! MBC30's 8 RAM banks are not supported (no targeted game uses them).
 
 use crate::cartridge::Mbc;
+use termboy_core::state::{Reader, StateError, Writer};
 
 #[derive(Default)]
 struct Rtc {
@@ -73,6 +74,29 @@ impl Rtc {
                 self.carry = value & 0x80 != 0;
             }
         }
+    }
+
+    fn serialize(&self, w: &mut Writer) {
+        w.put_u32(self.subsec);
+        w.put_u8(self.secs);
+        w.put_u8(self.mins);
+        w.put_u8(self.hours);
+        w.put_u16(self.days);
+        w.put_bool(self.halt);
+        w.put_bool(self.carry);
+        w.put_bytes(&self.latched);
+    }
+
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.subsec = r.get_u32()?;
+        self.secs = r.get_u8()?;
+        self.mins = r.get_u8()?;
+        self.hours = r.get_u8()?;
+        self.days = r.get_u16()?;
+        self.halt = r.get_bool()?;
+        self.carry = r.get_bool()?;
+        self.latched.copy_from_slice(r.get_bytes(5)?);
+        Ok(())
     }
 }
 
@@ -202,6 +226,26 @@ impl Mbc for Mbc3 {
         if self.has_rtc {
             self.rtc.tick(tcycles);
         }
+    }
+
+    fn serialize(&self, w: &mut Writer) {
+        w.put_bytes(&self.ram);
+        w.put_bool(self.enable);
+        w.put_u8(self.rom_bank);
+        w.put_u8(self.select);
+        w.put_bool(self.latch_pending);
+        self.rtc.serialize(w);
+    }
+
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        let n = self.ram.len();
+        self.ram.copy_from_slice(r.get_bytes(n)?);
+        self.enable = r.get_bool()?;
+        self.rom_bank = r.get_u8()?;
+        self.select = r.get_u8()?;
+        self.latch_pending = r.get_bool()?;
+        self.rtc.deserialize(r)?;
+        Ok(())
     }
 }
 

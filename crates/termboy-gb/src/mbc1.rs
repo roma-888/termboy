@@ -2,6 +2,7 @@
 //! MBC1M multicart wiring is not supported (no targeted game uses it).
 
 use crate::cartridge::Mbc;
+use termboy_core::state::{Reader, StateError, Writer};
 
 pub(crate) struct Mbc1 {
     rom: Vec<u8>,
@@ -75,6 +76,24 @@ impl Mbc for Mbc1 {
     fn load(&mut self, data: &[u8], _now: u64) {
         let n = data.len().min(self.ram.len());
         self.ram[..n].copy_from_slice(&data[..n]);
+    }
+
+    fn serialize(&self, w: &mut Writer) {
+        w.put_bytes(&self.ram);
+        w.put_bool(self.ram_enable);
+        w.put_u8(self.bank_lo);
+        w.put_u8(self.bank2);
+        w.put_bool(self.mode);
+    }
+
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        let n = self.ram.len();
+        self.ram.copy_from_slice(r.get_bytes(n)?);
+        self.ram_enable = r.get_bool()?;
+        self.bank_lo = r.get_u8()?;
+        self.bank2 = r.get_u8()?;
+        self.mode = r.get_bool()?;
+        Ok(())
     }
 }
 

@@ -13,6 +13,7 @@ pub mod timer;
 use bus::Bus;
 use cartridge::{CartError, Cartridge};
 use cpu::Cpu;
+use termboy_core::state::{Reader, StateError, Writer};
 use termboy_core::{Buttons, Core, FrameBuffer, Rgb};
 
 /// Classic DMG green ramp, lightest to darkest.
@@ -47,10 +48,12 @@ pub struct GameBoy {
     cpu: Cpu,
     frame: FrameBuffer,
     palette: [Rgb; 4],
+    rom_id: u64,
 }
 
 impl GameBoy {
     pub fn new(rom: Vec<u8>) -> Result<Self, CartError> {
+        let rom_id = termboy_core::state::rom_id(&rom);
         let cart = Cartridge::new(rom)?;
         let cgb = cart.cgb();
         let mut cpu = Cpu::new(Bus::new(cart));
@@ -67,6 +70,7 @@ impl GameBoy {
             cpu,
             frame: FrameBuffer::new(160, 144),
             palette: DMG_GREEN,
+            rom_id,
         })
     }
 
@@ -131,6 +135,33 @@ impl Core for GameBoy {
 
     fn set_audio_rate(&mut self, hz: u32) {
         self.cpu.bus.apu.set_sample_rate(hz);
+    }
+
+    fn save_state(&self) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.put_bytes(b"TBSS");
+        w.put_u16(termboy_core::STATE_VERSION);
+        w.put_u8(0); // console 0 = GB
+        w.put_u64(self.rom_id);
+        self.cpu.serialize(&mut w);
+        w.buf
+    }
+
+    fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {
+        let mut r = Reader::new(data);
+        if r.get_bytes(4)? != b"TBSS" {
+            return Err(StateError::BadMagic);
+        }
+        if r.get_u16()? != termboy_core::STATE_VERSION {
+            return Err(StateError::BadVersion);
+        }
+        if r.get_u8()? != 0 {
+            return Err(StateError::WrongConsole);
+        }
+        if r.get_u64()? != self.rom_id {
+            return Err(StateError::WrongRom);
+        }
+        self.cpu.deserialize(&mut r)
     }
 }
 

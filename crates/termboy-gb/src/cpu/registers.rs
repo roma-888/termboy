@@ -1,6 +1,8 @@
 //! SM83 register file. Flag bits live in F's high nibble; the low nibble
 //! is hardwired to zero on real hardware, so every F write masks it.
 
+use termboy_core::state::{Reader, StateError, Writer};
+
 pub const Z: u8 = 0x80; // zero
 pub const N: u8 = 0x40; // subtract
 pub const H: u8 = 0x20; // half-carry
@@ -43,6 +45,33 @@ impl Registers {
     pub fn set_flag(&mut self, mask: u8, on: bool) {
         if on { self.f |= mask } else { self.f &= !mask }
         self.f &= 0xF0;
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_u8(self.a);
+        w.put_u8(self.f);
+        w.put_u8(self.b);
+        w.put_u8(self.c);
+        w.put_u8(self.d);
+        w.put_u8(self.e);
+        w.put_u8(self.h);
+        w.put_u8(self.l);
+        w.put_u16(self.sp);
+        w.put_u16(self.pc);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.a = r.get_u8()?;
+        self.f = r.get_u8()?;
+        self.b = r.get_u8()?;
+        self.c = r.get_u8()?;
+        self.d = r.get_u8()?;
+        self.e = r.get_u8()?;
+        self.h = r.get_u8()?;
+        self.l = r.get_u8()?;
+        self.sp = r.get_u16()?;
+        self.pc = r.get_u16()?;
+        Ok(())
     }
 }
 

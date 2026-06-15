@@ -6,6 +6,7 @@ use std::fmt;
 use crate::mbc1::Mbc1;
 use crate::mbc3::Mbc3;
 use crate::mbc5::Mbc5;
+use termboy_core::state::{Reader, StateError, Writer};
 
 #[derive(Debug)]
 pub enum CartError {
@@ -48,6 +49,9 @@ pub trait Mbc {
     fn tick(&mut self, tcycles: u32) {
         let _ = tcycles;
     }
+    /// Serialize mapper state for a save state (RAM + banking; never the ROM).
+    fn serialize(&self, w: &mut Writer);
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError>;
 }
 
 /// RAM size in bytes from header byte 0x149.
@@ -93,6 +97,14 @@ impl Mbc for RomOnly {
     fn load(&mut self, data: &[u8], _now: u64) {
         let n = data.len().min(self.ram.len());
         self.ram[..n].copy_from_slice(&data[..n]);
+    }
+    fn serialize(&self, w: &mut Writer) {
+        w.put_bytes(&self.ram);
+    }
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        let n = self.ram.len();
+        self.ram.copy_from_slice(r.get_bytes(n)?);
+        Ok(())
     }
 }
 
@@ -160,6 +172,10 @@ impl Cartridge {
     pub fn save(&self, now: u64) -> Option<Vec<u8>> { self.mbc.save(now) }
     pub fn load(&mut self, data: &[u8], now: u64) { self.mbc.load(data, now) }
     pub fn tick(&mut self, tcycles: u32) { self.mbc.tick(tcycles) }
+    pub(crate) fn serialize(&self, w: &mut Writer) { self.mbc.serialize(w) }
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.mbc.deserialize(r)
+    }
 }
 
 #[cfg(test)]

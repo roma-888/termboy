@@ -6,6 +6,7 @@ mod render;
 mod tests;
 
 use crate::bus::{IF_STAT, IF_VBLANK};
+use termboy_core::state::{Reader, StateError, Writer};
 
 pub const LCDC_BG_ON: u8 = 0x01;
 pub const LCDC_OBJ_ON: u8 = 0x02;
@@ -189,5 +190,56 @@ impl Ppu {
             self.window_line = 0;
             self.wy_hit = false;
         }
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_bytes(&self.vram[..]);
+        w.put_bytes(&self.oam);
+        w.put_u8(self.lcdc);
+        w.put_u8(self.stat);
+        w.put_u8(self.scy);
+        w.put_u8(self.scx);
+        w.put_u8(self.ly);
+        w.put_u8(self.lyc);
+        w.put_u8(self.bgp);
+        w.put_u8(self.obp0);
+        w.put_u8(self.obp1);
+        w.put_u8(self.wy);
+        w.put_u8(self.wx);
+        w.put_u16(self.dot);
+        w.put_u8(self.window_line);
+        w.put_bool(self.wy_hit);
+        w.put_bool(self.stat_line);
+        w.put_bool(self.hblank_pulse);
+        w.put_bytes(&self.bg_pal);
+        w.put_bytes(&self.obj_pal);
+        w.put_u8(self.bcps);
+        w.put_u8(self.ocps);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.vram.copy_from_slice(r.get_bytes(0x4000)?);
+        self.oam.copy_from_slice(r.get_bytes(0xA0)?);
+        self.lcdc = r.get_u8()?;
+        self.stat = r.get_u8()?;
+        self.scy = r.get_u8()?;
+        self.scx = r.get_u8()?;
+        self.ly = r.get_u8()?;
+        self.lyc = r.get_u8()?;
+        self.bgp = r.get_u8()?;
+        self.obp0 = r.get_u8()?;
+        self.obp1 = r.get_u8()?;
+        self.wy = r.get_u8()?;
+        self.wx = r.get_u8()?;
+        self.dot = r.get_u16()?;
+        self.window_line = r.get_u8()?;
+        self.wy_hit = r.get_bool()?;
+        self.stat_line = r.get_bool()?;
+        self.hblank_pulse = r.get_bool()?;
+        self.bg_pal.copy_from_slice(r.get_bytes(64)?);
+        self.obj_pal.copy_from_slice(r.get_bytes(64)?);
+        self.bcps = r.get_u8()?;
+        self.ocps = r.get_u8()?;
+        Ok(())
     }
 }

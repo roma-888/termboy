@@ -1,6 +1,8 @@
 //! Serial port stub. Captures outgoing bytes; this is how Blargg test ROMs
 //! report pass/fail, so the test harness reads `output()`.
 
+use termboy_core::state::{Reader, StateError, Writer};
+
 #[derive(Default)]
 pub struct Serial {
     sb: u8,
@@ -18,6 +20,15 @@ impl Serial {
         }
     }
     pub fn output(&self) -> &[u8] { &self.out }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_u8(self.sb);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.sb = r.get_u8()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

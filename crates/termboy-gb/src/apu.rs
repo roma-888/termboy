@@ -3,6 +3,8 @@
 //! at the host sample rate. Documented simplifications: no zombie-mode
 //! envelope writes, no length-clock trigger edge cases.
 
+use termboy_core::state::{Reader, StateError, Writer};
+
 const DUTY: [u8; 4] = [0b0000_0001, 0b1000_0001, 0b1000_0111, 0b0111_1110];
 const NOISE_DIVISORS: [u32; 8] = [8, 16, 32, 48, 64, 80, 96, 112];
 
@@ -123,6 +125,43 @@ impl Pulse {
             }
         }
     }
+
+    fn serialize(&self, w: &mut Writer) {
+        w.put_bool(self.has_sweep);
+        w.put_bool(self.enabled);
+        w.put_u8(self.nrx0);
+        w.put_u8(self.nrx1);
+        w.put_u8(self.nrx2);
+        w.put_u16(self.freq);
+        w.put_bool(self.length_enable);
+        w.put_u8(self.duty_pos);
+        w.put_u32(self.timer as u32);
+        w.put_u16(self.length);
+        w.put_u8(self.env_vol);
+        w.put_u8(self.env_timer);
+        w.put_u8(self.sweep_timer);
+        w.put_u16(self.sweep_shadow);
+        w.put_bool(self.sweep_enabled);
+    }
+
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.has_sweep = r.get_bool()?;
+        self.enabled = r.get_bool()?;
+        self.nrx0 = r.get_u8()?;
+        self.nrx1 = r.get_u8()?;
+        self.nrx2 = r.get_u8()?;
+        self.freq = r.get_u16()?;
+        self.length_enable = r.get_bool()?;
+        self.duty_pos = r.get_u8()?;
+        self.timer = r.get_u32()? as i32;
+        self.length = r.get_u16()?;
+        self.env_vol = r.get_u8()?;
+        self.env_timer = r.get_u8()?;
+        self.sweep_timer = r.get_u8()?;
+        self.sweep_shadow = r.get_u16()?;
+        self.sweep_enabled = r.get_bool()?;
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -176,6 +215,29 @@ impl WaveCh {
         }
         self.timer = (2048 - self.freq as i32) * 2;
         self.pos = 0;
+    }
+
+    fn serialize(&self, w: &mut Writer) {
+        w.put_bool(self.enabled);
+        w.put_bool(self.dac);
+        w.put_u8(self.nr32);
+        w.put_u16(self.freq);
+        w.put_bool(self.length_enable);
+        w.put_u16(self.length);
+        w.put_u32(self.timer as u32);
+        w.put_u8(self.pos);
+    }
+
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.enabled = r.get_bool()?;
+        self.dac = r.get_bool()?;
+        self.nr32 = r.get_u8()?;
+        self.freq = r.get_u16()?;
+        self.length_enable = r.get_bool()?;
+        self.length = r.get_u16()?;
+        self.timer = r.get_u32()? as i32;
+        self.pos = r.get_u8()?;
+        Ok(())
     }
 }
 
@@ -254,6 +316,31 @@ impl Noise {
         self.lfsr = 0x7FFF;
         self.env_vol = self.nr42 >> 4;
         self.env_timer = if self.nr42 & 7 == 0 { 8 } else { self.nr42 & 7 };
+    }
+
+    fn serialize(&self, w: &mut Writer) {
+        w.put_bool(self.enabled);
+        w.put_u8(self.nr42);
+        w.put_u8(self.nr43);
+        w.put_bool(self.length_enable);
+        w.put_u16(self.length);
+        w.put_u32(self.timer as u32);
+        w.put_u16(self.lfsr);
+        w.put_u8(self.env_vol);
+        w.put_u8(self.env_timer);
+    }
+
+    fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.enabled = r.get_bool()?;
+        self.nr42 = r.get_u8()?;
+        self.nr43 = r.get_u8()?;
+        self.length_enable = r.get_bool()?;
+        self.length = r.get_u16()?;
+        self.timer = r.get_u32()? as i32;
+        self.lfsr = r.get_u16()?;
+        self.env_vol = r.get_u8()?;
+        self.env_timer = r.get_u8()?;
+        Ok(())
     }
 }
 
@@ -507,6 +594,33 @@ impl Apu {
             }
             _ => {}
         }
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_bool(self.on);
+        w.put_u32(self.seq_timer);
+        w.put_u8(self.seq_step);
+        self.ch1.serialize(w);
+        self.ch2.serialize(w);
+        self.ch3.serialize(w);
+        self.ch4.serialize(w);
+        w.put_u8(self.nr50);
+        w.put_u8(self.nr51);
+        w.put_bytes(&self.wave_ram);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.on = r.get_bool()?;
+        self.seq_timer = r.get_u32()?;
+        self.seq_step = r.get_u8()?;
+        self.ch1.deserialize(r)?;
+        self.ch2.deserialize(r)?;
+        self.ch3.deserialize(r)?;
+        self.ch4.deserialize(r)?;
+        self.nr50 = r.get_u8()?;
+        self.nr51 = r.get_u8()?;
+        self.wave_ram.copy_from_slice(r.get_bytes(16)?);
+        Ok(())
     }
 }
 
