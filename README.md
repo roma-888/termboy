@@ -77,7 +77,7 @@ termboy's work:
 
 - Game Boy CPU/timing — [Blargg's gb-test-roms](https://github.com/retrio/gb-test-roms) (`cargo`-fetched by `scripts/fetch-test-roms.sh`)
 - PPU accuracy — [dmg-acid2 and cgb-acid2](https://github.com/mattcurrie/dmg-acid2) by Matt Currie (the banner above is termboy's cgb-acid2 output)
-- GBA CPU + PPU — [jsmolka's gba-tests](https://github.com/jsmolka/gba-tests) (`arm`, `thumb`, `shades`, `stripes`)
+- GBA — [jsmolka's gba-tests](https://github.com/jsmolka/gba-tests) (`arm`, `thumb`, `memory`, `nes`, `save`, `shades`, `stripes`), run headlessly. `bios.gba` is omitted: it requires a real BIOS dump, which termboy doesn't use (HLE BIOS). The [mGBA suite](https://github.com/mgba-emu/suite) (MIT) is a local-only diagnostic (`scripts/fetch-mgba-suite.sh`), not CI-gated.
 
 Commercial ROMs and save files are git-ignored and never committed; bring your
 own and drop them in `./roms`.
