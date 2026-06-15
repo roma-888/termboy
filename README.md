@@ -17,15 +17,16 @@ library. MBC1/MBC3/MBC5 with battery saves (`<rom>.sav`, auto-flushed) and the M
 real-time clock. Blargg cpu_instrs + instr_timing, dmg-acid2 and cgb-acid2 (both
 pixel-exact vs official references) all pass.
 
-**Game Boy Advance — commercial games boot.** ARM7TDMI CPU (jsmolka's arm/thumb test
-ROMs pass headlessly), the full scanline PPU (tiled and bitmap modes, affine
-backgrounds, regular and affine sprites, windows, alpha/brightness blending,
-mosaic), all four DMA channels, cascading timers, the IE/IF/IME interrupt system,
-and an HLE BIOS (IntrWait, CpuSet, LZ77/Huffman decompression, affine helpers, …).
-Pokémon boots through its intro to the title screen and in-game menus. Battery
-saves persist for every cartridge save type — SRAM, Flash (64K/128K), and
-EEPROM (4K/64K) — auto-detected from the ROM and written to `<rom>.sav`. Not
-yet implemented: GBA audio and a cycle-timing/performance pass.
+**Game Boy Advance — commercial games play with sound.** ARM7TDMI CPU (jsmolka's
+arm/thumb test ROMs pass headlessly), the full scanline PPU (tiled and bitmap
+modes, affine backgrounds, regular and affine sprites, windows, alpha/brightness
+blending, mosaic), all four DMA channels, cascading timers, the IE/IF/IME
+interrupt system, an HLE BIOS (IntrWait, CpuSet, LZ77/Huffman decompression,
+affine helpers, …), and audio — the four PSG channels plus both Direct Sound
+DMA-FIFO channels. Pokémon boots through its intro to the title screen, plays its
+music, and reaches the in-game menus. Battery saves persist for every cartridge
+save type — SRAM, Flash (64K/128K), and EEPROM (4K/64K) — auto-detected from the
+ROM and written to `<rom>.sav`. Remaining: a cycle-timing/performance pass.
 
 - `cargo run --release -p termboy` — opens a game picker for `./roms` (GB/GBC/GBA, grouped by hardware; no argument needed)
 - `cargo run --release -p termboy -- <rom>` — play a `.gb`/`.gbc`/`.gba` directly (pixel-perfect when it fits, auto-scaled to fit below that; `--exact` disables scaling)
