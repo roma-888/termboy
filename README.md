@@ -5,8 +5,9 @@ A Game Boy, Game Boy Color, and Game Boy Advance emulator that runs in your term
 ![cgb-acid2 rendered pixel-exact by termboy](assets/cgb-acid2.png)
 
 Written in Rust. Three emulation cores share one frontend — a half-block terminal
-renderer with auto-scaling, a ROM picker grouped by hardware, configurable input,
-audio, battery saves, save-state slots, adjustable play speed, and rewind.
+renderer (with true full-color images on kitty-graphics terminals) and
+auto-scaling, a ROM picker grouped by hardware, configurable input, audio,
+battery saves, save-state slots, adjustable play speed, and rewind.
 
 ## Status
 
@@ -36,6 +37,7 @@ throughput -- <rom.gba>`. That completes the GBA roadmap — cycle-exact timing
 - `cargo run --release -p termboy -- <rom>` — play a `.gb`/`.gbc`/`.gba` directly (pixel-perfect when it fits, auto-scaled to fit below that; `--exact` disables scaling)
 - `--keys swap` (A/B swapped) or `--keys a=k,b=j,start=space` for custom bindings
 - `--palette green|gray|pocket` or four hex colors (`--palette '#e0f8d0,#88c070,#346856,#081820'`) — Game Boy only
+- `--graphics auto|kitty|half` — `auto` (default) uses the kitty graphics protocol on terminals that support it (Ghostty/kitty/WezTerm), half-blocks elsewhere; `kitty`/`half` force the choice
 - `cargo run --release -p termboy -- --headless <rom.gb>` — run headless, print serial output
 - `cargo test --workspace` — full test suite including hardware test ROMs
 
@@ -89,6 +91,12 @@ If the image looks blurry, **zoom the terminal out** (⌘− / Ctrl−, a smalle
 font) so there are enough cells for pixel-perfect rendering; **zoom in** (⌘+ /
 Ctrl+) to make the picture physically larger at the cost of sharpness. In other
 words, font size *is* your resolution dial.
+
+On terminals that implement the **kitty graphics protocol** (Ghostty, kitty,
+WezTerm) termboy skips half-blocks entirely and streams each frame as a true
+full-resolution color image, scaled to fill the window — the half-block notes
+above don't apply there. This is automatic; force or disable it with
+`--graphics kitty` / `--graphics half`.
 
 ## Test ROMs & credits
 

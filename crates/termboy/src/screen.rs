@@ -214,10 +214,11 @@ impl Screen {
 }
 
 /// 3x5 uppercase pixel font for the overlay. Unknown chars render as a box.
-const GLYPH_W: usize = 3;
-const GLYPH_H: usize = 5;
+/// `pub(crate)` so the kitty renderer can composite the same badge into RGB.
+pub(crate) const GLYPH_W: usize = 3;
+pub(crate) const GLYPH_H: usize = 5;
 
-fn glyph(c: char) -> [&'static str; 5] {
+pub(crate) fn glyph(c: char) -> [&'static str; 5] {
     match c.to_ascii_uppercase() {
         ' ' => ["   ", "   ", "   ", "   ", "   "],
         '0' => ["###", "# #", "# #", "# #", "###"],

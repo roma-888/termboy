@@ -5,6 +5,7 @@
 
 mod audio;
 mod input;
+mod kitty;
 mod menu;
 mod playback;
 mod rewind;
@@ -33,6 +34,8 @@ options:
   --palette <name>   green (default), gray, pocket, or four hex colors
                      lightest-to-darkest: '#e0f8d0,#88c070,#346856,#081820'
   --exact            require a 160x72 terminal instead of auto-scaling
+  --graphics <mode>  auto (default), kitty (force image protocol), or half (force
+                     half-blocks). auto uses kitty graphics on Ghostty/kitty/WezTerm
   --keys <spec>      'swap' (A/B swapped) or per-button: 'a=k,b=j,start=space'
   --headless         run without UI, print serial output (debug tool)
   -h, --help         show this help
@@ -214,6 +217,91 @@ const FRAME_TIME: Duration = Duration::from_nanos(
 /// controllable, instead of the 6x that overshot a short tap to the buffer floor.
 const REWIND_STEP: u32 = 3;
 
+/// Which renderer to use. `Auto` picks kitty graphics on terminals that support
+/// it (detected from the environment), half-blocks elsewhere.
+#[derive(Clone, Copy)]
+enum GraphicsPref {
+    Auto,
+    Kitty,
+    Half,
+}
+
+impl GraphicsPref {
+    fn use_kitty(self) -> bool {
+        match self {
+            GraphicsPref::Kitty => true,
+            GraphicsPref::Half => false,
+            GraphicsPref::Auto => kitty::detect_kitty(|k| std::env::var(k).ok()),
+        }
+    }
+}
+
+/// Active renderer: half-block ANSI or kitty graphics. The run loop drives
+/// whichever through this one interface, so it stays renderer-agnostic.
+enum Display {
+    Half(screen::Screen),
+    Kitty(kitty::KittyScreen),
+}
+
+impl Display {
+    fn new(use_kitty: bool, width: usize, height: usize) -> Self {
+        if use_kitty {
+            Display::Kitty(kitty::KittyScreen::new(width, height))
+        } else {
+            Display::Half(screen::Screen::new(width, height))
+        }
+    }
+
+    fn required_size(&self) -> (usize, usize) {
+        match self {
+            Display::Half(s) => s.required_size(),
+            Display::Kitty(k) => k.required_size(),
+        }
+    }
+
+    fn set_viewport(&mut self, cols: usize, rows: usize) {
+        match self {
+            Display::Half(s) => s.set_viewport(cols, rows),
+            Display::Kitty(k) => k.set_viewport(cols, rows),
+        }
+    }
+
+    fn invalidate(&mut self) {
+        match self {
+            Display::Half(s) => s.invalidate(),
+            Display::Kitty(k) => k.invalidate(),
+        }
+    }
+
+    fn set_overlay(&mut self, msg: &str) {
+        match self {
+            Display::Half(s) => s.set_overlay(msg),
+            Display::Kitty(k) => k.set_overlay(msg),
+        }
+    }
+
+    fn clear_overlay(&mut self) {
+        match self {
+            Display::Half(s) => s.clear_overlay(),
+            Display::Kitty(k) => k.clear_overlay(),
+        }
+    }
+
+    fn render(&mut self, fb: &termboy_core::FrameBuffer, out: &mut String) {
+        match self {
+            Display::Half(s) => s.render(fb, out),
+            Display::Kitty(k) => k.render(fb, out),
+        }
+    }
+
+    /// On exit, free any transmitted image so it doesn't linger in the terminal.
+    fn teardown(&self, out: &mut String) {
+        if let Display::Kitty(_) = self {
+            out.push_str("\x1b_Ga=d,d=A\x1b\\");
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -224,6 +312,7 @@ fn main() -> ExitCode {
     let exact = args.iter().any(|a| a == "--exact");
     let mut palette = DMG_GREEN;
     let mut keymap = input::default_keymap();
+    let mut graphics = GraphicsPref::Auto;
     let mut rom_arg: Option<&str> = None;
     let mut it = args.iter().peekable();
     while let Some(arg) = it.next() {
@@ -235,6 +324,10 @@ fn main() -> ExitCode {
             ("keys", Some(n.to_string()))
         } else if arg == "--keys" {
             ("keys", it.next().cloned())
+        } else if let Some(n) = arg.strip_prefix("--graphics=") {
+            ("graphics", Some(n.to_string()))
+        } else if arg == "--graphics" {
+            ("graphics", it.next().cloned())
         } else {
             if !arg.starts_with('-') {
                 rom_arg = Some(arg);
@@ -259,9 +352,19 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             },
+            ("graphics", Some(mode)) => match mode.as_str() {
+                "auto" => graphics = GraphicsPref::Auto,
+                "kitty" => graphics = GraphicsPref::Kitty,
+                "half" => graphics = GraphicsPref::Half,
+                other => {
+                    eprintln!("error: --graphics must be auto, kitty, or half (got {other:?})");
+                    return ExitCode::FAILURE;
+                }
+            },
             _ => {}
         }
     }
+    let use_kitty = graphics.use_kitty();
     match rom_arg {
         Some(path) if is_gba(path) => {
             if headless {
@@ -269,7 +372,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             match load_gba(path) {
-                Ok(core) => run_terminal(core, 240, 160, exact, &sav_path(path), keymap),
+                Ok(core) => run_terminal(core, 240, 160, exact, &sav_path(path), keymap, use_kitty),
                 Err(msg) => {
                     eprintln!("error: {msg}");
                     ExitCode::FAILURE
@@ -287,14 +390,14 @@ fn main() -> ExitCode {
             if headless {
                 run_headless(gb, &sav)
             } else {
-                run_terminal(gb, 160, 144, exact, &sav, keymap)
+                run_terminal(gb, 160, 144, exact, &sav, keymap, use_kitty)
             }
         }
         None if headless => {
             eprintln!("{USAGE}");
             ExitCode::FAILURE
         }
-        None => run_menu(palette, exact, keymap),
+        None => run_menu(palette, exact, keymap, use_kitty),
     }
 }
 
@@ -330,6 +433,7 @@ fn run_menu(
     palette: [Rgb; 4],
     exact: bool,
     keymap: std::collections::HashMap<crossterm::event::KeyCode, termboy_core::Buttons>,
+    use_kitty: bool,
 ) -> ExitCode {
     let rom_dir = if Path::new("roms").is_dir() { Path::new("roms") } else { Path::new(".") };
     let roms = menu::scan_roms(rom_dir);
@@ -355,7 +459,7 @@ fn run_menu(
             match load_gba(&path) {
                 Ok(core) => {
                     let mut input = input::Input::new(guard.enhanced, keymap.clone());
-                    let mut screen = screen::Screen::new(240, 160);
+                    let mut screen = Display::new(use_kitty, 240, 160);
                     print!("\x1b[0m\x1b[2J");
                     let sav = sav_path(&path);
                     let audio = &audio; // keep the move closure from consuming it
@@ -370,7 +474,7 @@ fn run_menu(
             match load_game(&path, palette) {
                 Ok((gb, sav)) => {
                     let mut input = input::Input::new(guard.enhanced, keymap.clone());
-                    let mut screen = screen::Screen::new(160, 144);
+                    let mut screen = Display::new(use_kitty, 160, 144);
                     print!("\x1b[0m\x1b[2J");
                     let audio = &audio;
                     catch_game_panic(move || {
@@ -497,6 +601,7 @@ fn run_terminal<C: Core>(
     exact: bool,
     sav: &Path,
     keymap: std::collections::HashMap<crossterm::event::KeyCode, termboy_core::Buttons>,
+    use_kitty: bool,
 ) -> ExitCode {
     install_panic_hook();
     let guard = match TerminalGuard::enter() {
@@ -507,7 +612,7 @@ fn run_terminal<C: Core>(
         }
     };
     let mut input = input::Input::new(guard.enhanced, keymap);
-    let mut screen = screen::Screen::new(width, height);
+    let mut screen = Display::new(use_kitty, width, height);
     let audio = audio::Audio::new();
     run_game(core, exact, sav, &mut input, &mut screen, &audio)
 }
@@ -518,7 +623,7 @@ fn run_game<C: Core>(
     exact: bool,
     sav: &Path,
     input: &mut input::Input,
-    screen: &mut screen::Screen,
+    screen: &mut Display,
     audio: &audio::Audio,
 ) -> ExitCode {
     core.set_audio_rate(audio.sample_rate);
@@ -657,5 +762,12 @@ fn run_game<C: Core>(
         }
     };
     flush_save(&core, sav, &mut last_saved);
+    // Free any graphics image so it doesn't linger over the picker / after exit.
+    let mut tail = String::new();
+    screen.teardown(&mut tail);
+    if !tail.is_empty() {
+        print!("{tail}");
+        std::io::stdout().flush().ok();
+    }
     code
 }
