@@ -3,6 +3,11 @@
 //! it in r12, thumb.gba in r7 (0 = all passed) — then the ROM draws the
 //! verdict and parks in a one-instruction `b idle` loop. We run until the
 //! same address executes twice in a row, then read the register.
+//!
+//! We drive `step_system` (not bare `step`) so the harness matches the real
+//! GbaCore: DMA, timers, and interrupts all run. nes.gba's DMA tests need it.
+//! A DMA tick doesn't advance the PC, so the idle check skips those ticks
+//! (otherwise a pending DMA would look like the `b idle` park).
 
 use termboy_gba::bus::Bus;
 use termboy_gba::cpu::Cpu;
@@ -14,8 +19,9 @@ fn run_to_idle(name: &str) -> Cpu {
     let mut cpu = Cpu::new(Bus::new(rom));
     for _ in 0..50_000_000u64 {
         let before = cpu.exec_addr();
-        cpu.step();
-        if cpu.exec_addr() == before {
+        let ran_dma = cpu.bus.dma_ready().is_some();
+        cpu.step_system();
+        if !ran_dma && cpu.exec_addr() == before {
             return cpu;
         }
     }
@@ -38,6 +44,12 @@ fn jsmolka_thumb() {
 fn jsmolka_memory() {
     let cpu = run_to_idle("memory.gba");
     assert_eq!(cpu.regs.get(12), 0, "memory.gba failed at test {}", cpu.regs.get(12));
+}
+
+#[test]
+fn jsmolka_nes() {
+    let cpu = run_to_idle("nes.gba");
+    assert_eq!(cpu.regs.get(12), 0, "nes.gba failed at test {}", cpu.regs.get(12));
 }
 
 #[test]
