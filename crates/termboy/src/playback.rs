@@ -41,9 +41,11 @@ impl Playback {
         SPEEDS[self.speed]
     }
 
-    /// The wall-clock interval between frames at the current speed: the nominal
-    /// `base` period divided by the multiplier (2x speed -> half the wait).
-    pub fn frame_time(&self, base: Duration) -> Duration {
+    /// Wall-clock duration one emulated frame should occupy at the current
+    /// speed: the nominal `base` period over the multiplier (`4x` -> a quarter
+    /// of it). The run loop schedules emulation against this, so the selected
+    /// speed is exact no matter how often it can afford to redraw.
+    pub fn frame_dt(&self, base: Duration) -> Duration {
         base.div_f64(self.multiplier())
     }
 
@@ -78,6 +80,20 @@ impl Playback {
     }
 }
 
+/// How many emulated frames are due now, given `behind` = wall time elapsed
+/// since the next frame came due and `dt` = the per-frame spacing. Always at
+/// least one; clamped to `max` so a long stall (e.g. the laptop slept) drops its
+/// backlog instead of replaying it in a burst.
+///
+/// The run loop emulates this many frames but redraws only the last, so a slow
+/// renderer (the kitty graphics path costs more than a frame at 4x) lowers the
+/// *display* rate without ever slowing emulation below the selected speed — and
+/// without touching image quality, unlike rendering fewer pixels.
+pub fn frames_due(behind: Duration, dt: Duration, max: u32) -> u32 {
+    let n = behind.div_duration_f64(dt).floor() as u32 + 1;
+    n.clamp(1, max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,15 +126,38 @@ mod tests {
     }
 
     #[test]
-    fn frame_time_scales_inversely_with_speed() {
+    fn frame_dt_scales_inversely_with_speed() {
         let base = Duration::from_millis(20);
         let mut p = Playback::new();
-        assert_eq!(p.frame_time(base), base); // 1x
+        assert_eq!(p.frame_dt(base), base); // 1x
         p.faster();
-        assert_eq!(p.frame_time(base), Duration::from_millis(10)); // 2x
+        assert_eq!(p.frame_dt(base), Duration::from_millis(10)); // 2x
+        p.faster();
+        assert_eq!(p.frame_dt(base), Duration::from_millis(5)); // 4x
         p.slower();
         p.slower();
-        assert_eq!(p.frame_time(base), Duration::from_millis(40)); // 0.5x
+        p.slower();
+        assert_eq!(p.frame_dt(base), Duration::from_millis(40)); // 0.5x
+    }
+
+    #[test]
+    fn frames_due_counts_elapsed_frames_at_least_one() {
+        let dt = Duration::from_millis(4);
+        // On schedule (nothing elapsed) exactly one frame is due.
+        assert_eq!(frames_due(Duration::ZERO, dt, 32), 1);
+        // Most of one interval elapsed: still just the one.
+        assert_eq!(frames_due(Duration::from_millis(3), dt, 32), 1);
+        // One full interval behind: the next is also due (two total).
+        assert_eq!(frames_due(dt, dt, 32), 2);
+        // ~3.5 intervals behind -> 4 due (3 whole + the current one).
+        assert_eq!(frames_due(Duration::from_millis(14), dt, 32), 4);
+    }
+
+    #[test]
+    fn frames_due_clamps_a_stall_to_max() {
+        let dt = Duration::from_millis(4);
+        // A 10-second stall would be 2500 frames; the cap drops the backlog.
+        assert_eq!(frames_due(Duration::from_secs(10), dt, 32), 32);
     }
 
     #[test]

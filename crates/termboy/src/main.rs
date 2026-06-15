@@ -217,6 +217,12 @@ const FRAME_TIME: Duration = Duration::from_nanos(
 /// controllable, instead of the 6x that overshot a short tap to the buffer floor.
 const REWIND_STEP: u32 = 3;
 
+/// Most emulated frames to run between redraws before giving up on the backlog.
+/// Fast-forward emulates several frames per redraw (4x ≈ 8–10 here); this caps
+/// the burst so a long stall (laptop sleep) drops its backlog instead of
+/// avalanching, while staying high enough not to throttle 4x on slower machines.
+const MAX_CATCHUP: u32 = 32;
+
 /// Which renderer to use. `Auto` picks kitty graphics on terminals that support
 /// it (detected from the environment), half-blocks elsewhere.
 #[derive(Clone, Copy)]
@@ -644,7 +650,10 @@ fn run_game<C: Core>(
     screen.invalidate();
 
     let mut out = String::new();
-    let mut next_frame = Instant::now();
+    // Wall-clock time the next emulated frame is due. Emulation is paced to this
+    // (so the selected speed is exact); the renderer draws only the latest frame
+    // and is allowed to skip redraws when it can't keep up — see the loop below.
+    let mut next_emu = Instant::now();
     let mut last_saved: Option<Vec<u8>> = core.save_ram();
     let mut frames: u32 = 0;
     let mut overlay_until = Instant::now();
@@ -710,7 +719,7 @@ fn run_game<C: Core>(
             screen.invalidate();
             last_size = (0, 0);
             std::thread::sleep(Duration::from_millis(100));
-            next_frame = Instant::now();
+            next_emu = Instant::now();
             continue;
         }
         if (cols, rows) != last_size {
@@ -722,6 +731,7 @@ fn run_game<C: Core>(
         }
 
         out.clear();
+        let frame_dt = playback.frame_dt(FRAME_TIME);
         if rewind_key.is_held(now) {
             // Rewind: step back through snapshots, newest first, but only every
             // REWIND_STEP displayed frames so it reverses at ~2x (not 6x). Audio
@@ -738,19 +748,35 @@ fn run_game<C: Core>(
             rewind_tick = rewind_tick.wrapping_add(1);
             screen.set_overlay("rewind");
             overlay_until = now + Duration::from_millis(400);
+            next_emu = now + FRAME_TIME; // rewind isn't speed-scaled: pace at 60 Hz
         } else {
             rewind_tick = 0; // fresh hold steps immediately
-            let fb = core.run_frame(input.buttons(Instant::now()));
-            screen.render(fb, &mut out);
-            core.drain_audio(&mut audio_buf);
-            if playback.is_muted() {
-                audio_buf.clear();
-            } else {
-                audio.push(&mut audio_buf);
+            // Emulate every frame whose due-time has arrived and draw only the
+            // last. At 4x the core needs ~240 fps but the renderer (the kitty
+            // graphics path costs more than a frame's wall-budget) can't redraw
+            // that fast — so it skips redraws, dropping the *display* rate while
+            // emulation still advances at the exact selected speed. This keeps
+            // image quality intact (full-resolution frames, just fewer of them),
+            // unlike trading pixels for speed. Audio drains every emulated frame,
+            // so production stays matched to the device at every speed.
+            let due = playback::frames_due(now.saturating_duration_since(next_emu), frame_dt, MAX_CATCHUP);
+            let buttons = input.buttons(now);
+            for i in 0..due {
+                let fb = core.run_frame(buttons);
+                if i + 1 == due {
+                    screen.render(fb, &mut out);
+                }
+                core.drain_audio(&mut audio_buf);
+                if playback.is_muted() {
+                    audio_buf.clear();
+                } else {
+                    audio.push(&mut audio_buf);
+                }
+                // Snapshot for rewind only on normal frames (the closure runs
+                // ~1/INTERVAL of the time, so save_state's cost is amortized).
+                rewind.record(|| core.save_state());
             }
-            // Snapshot for rewind only on normal frames (the closure runs
-            // ~1/INTERVAL of the time, so save_state's cost is amortized).
-            rewind.record(|| core.save_state());
+            next_emu += frame_dt * due;
         }
         if !out.is_empty() {
             print!("{out}");
@@ -762,14 +788,15 @@ fn run_game<C: Core>(
             flush_save(&core, sav, &mut last_saved); // every ~5 seconds
         }
 
-        // Speed scales the interval between frames; a speed change takes effect
-        // on the very next wait, so no anchor reset is needed.
-        next_frame += playback.frame_time(FRAME_TIME);
+        // Sleep until the next frame is due. If we've fallen more than a full
+        // catch-up window behind (the app was suspended, or the renderer simply
+        // can't sustain this speed), drop the backlog instead of replaying it in
+        // a burst — the same "don't catch up all at once" guard as before.
         let now = Instant::now();
-        if next_frame > now {
-            std::thread::sleep(next_frame - now);
-        } else {
-            next_frame = now; // fell behind: don't try to catch up in a burst
+        if now.saturating_duration_since(next_emu) > frame_dt * MAX_CATCHUP {
+            next_emu = now;
+        } else if next_emu > now {
+            std::thread::sleep(next_emu - now);
         }
     };
     flush_save(&core, sav, &mut last_saved);
