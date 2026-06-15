@@ -76,6 +76,12 @@ impl Bus {
         let count = self.dma[ch].count;
         let mut src = self.dma[ch].src & !(unit - 1);
         let mut dst = self.dma[ch].dst & !(unit - 1);
+        // EEPROM rides the DMA: its transfer length selects command + size.
+        if dst >> 24 == 0x0D {
+            self.save.eeprom_begin(count, true);
+        } else if src >> 24 == 0x0D {
+            self.save.eeprom_begin(count, false);
+        }
         for _ in 0..count {
             if unit == 4 {
                 let v = self.read32(src);
@@ -221,5 +227,61 @@ mod tests {
         program_ch3(&mut b, 1, 0x8000);
         b.write16(0x0400_00DE, 0);
         assert!(b.dma_ready().is_none());
+    }
+
+    #[test]
+    fn eeprom_write_then_read_round_trips_via_dma() {
+        let mut rom = vec![0u8; 0x400];
+        rom[0x200..0x208].copy_from_slice(b"EEPROM_V");
+        let mut b = Bus::new(rom);
+
+        // Build a 73-bit write command for addr 3, data 0x00FF00FF00FF00FF,
+        // as halfwords (bit 0 each) in EWRAM at 0x02000000.
+        let mut bits = vec![1u8, 0]; // write
+        for i in (0..6).rev() {
+            bits.push(((3usize >> i) & 1) as u8);
+        }
+        let data: u64 = 0x00FF_00FF_00FF_00FF;
+        for i in (0..64).rev() {
+            bits.push(((data >> i) & 1) as u8);
+        }
+        bits.push(0); // stop -> 73 units
+        for (i, &bit) in bits.iter().enumerate() {
+            b.write16(0x0200_0000 + i as u32 * 2, bit as u16);
+        }
+        // DMA3: EWRAM -> EEPROM (0x0D000000), 16-bit, 73 units, immediate
+        b.write32(0x0400_00D4, 0x0200_0000);
+        b.write32(0x0400_00D8, 0x0D00_0000);
+        b.write16(0x0400_00DC, 73);
+        b.write16(0x0400_00DE, 0x8000);
+        b.run_dma(b.dma_ready().unwrap());
+
+        // Read request (9 units) for addr 3.
+        let mut req = vec![1u8, 1];
+        for i in (0..6).rev() {
+            req.push(((3usize >> i) & 1) as u8);
+        }
+        req.push(0);
+        for (i, &bit) in req.iter().enumerate() {
+            b.write16(0x0200_0100 + i as u32 * 2, bit as u16);
+        }
+        b.write32(0x0400_00D4, 0x0200_0100);
+        b.write32(0x0400_00D8, 0x0D00_0000);
+        b.write16(0x0400_00DC, 9);
+        b.write16(0x0400_00DE, 0x8000);
+        b.run_dma(b.dma_ready().unwrap());
+
+        // Read reply DMA: EEPROM -> EWRAM, 68 units; reassemble the word.
+        b.write32(0x0400_00D4, 0x0D00_0000);
+        b.write32(0x0400_00D8, 0x0200_0200);
+        b.write16(0x0400_00DC, 68);
+        b.write16(0x0400_00DE, 0x8000);
+        b.run_dma(b.dma_ready().unwrap());
+
+        let mut got = 0u64;
+        for i in 4..68u32 {
+            got = (got << 1) | (b.read16(0x0200_0200 + i * 2) & 1) as u64;
+        }
+        assert_eq!(got, data);
     }
 }

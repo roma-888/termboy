@@ -165,6 +165,11 @@ impl Bus {
 
     pub fn read16(&mut self, addr: u32) -> u16 {
         self.cycles += 1;
+        if addr >> 24 == 0x0D {
+            if let Some(e) = self.save.eeprom() {
+                return e.read_bit();
+            }
+        }
         let addr = addr & !1;
         u16::from_le_bytes([self.read8_raw(addr), self.read8_raw(addr + 1)])
     }
@@ -209,6 +214,12 @@ impl Bus {
 
     pub fn write16(&mut self, addr: u32, value: u16) {
         self.cycles += 1;
+        if addr >> 24 == 0x0D {
+            if let Some(e) = self.save.eeprom() {
+                e.write_bit(value);
+                return;
+            }
+        }
         let addr = addr & !1;
         let [a, b] = value.to_le_bytes();
         self.write8_raw(addr, a);
