@@ -168,10 +168,10 @@ impl Screen {
             return;
         }
         // Each font pixel is `w` cols x `h` rows; cells are ~twice as tall as
-        // wide, so w = 2h keeps the blocks roughly square. Target ~1/12 of the
-        // height, then shrink until the message fits the width.
+        // wide, so w = 2h keeps the blocks roughly square. Target a small
+        // corner badge (~8% of the height), then shrink to fit the width.
         let cols_per_char = (GLYPH_W + 1) * 2; // (glyph + 1-px gap) at w=2 per font px
-        let mut h = (self.rows / 12).max(1);
+        let mut h = (self.rows / 80).max(1);
         while h > 1 && chars.len() * cols_per_char * h > self.cols.saturating_sub(2) {
             h -= 1;
         }

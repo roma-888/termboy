@@ -85,12 +85,13 @@ fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<St
     let KeyCode::Char(c) = k.code else { return None };
     let digit = |c: char| c.to_digit(10).map(|d| d as u8);
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
-    // Bare digit -> save.
+    // Bare digit -> save. Messages stay terse so the overlay badge stays a
+    // small corner notification rather than a wide banner over the game.
     if c.is_ascii_digit() && !shift {
         let slot = digit(c).unwrap();
         return Some(match write_save(&ss_path(sav, slot), &core.save_state()) {
-            Ok(()) => format!("saved slot {slot}"),
-            Err(_) => format!("save slot {slot} failed"),
+            Ok(()) => format!("saved {slot}"),
+            Err(_) => format!("failed {slot}"),
         });
     }
     // Shifted digit (kitty) or its shifted symbol (legacy) -> load.
@@ -102,13 +103,11 @@ fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<St
     };
     let slot = load_slot?;
     Some(match std::fs::read(ss_path(sav, slot)) {
-        // The overlay font is short on purpose (it scales up to stay readable),
-        // so keep messages terse: the StateError detail is dropped here.
         Ok(d) => match core.load_state(&d) {
-            Ok(()) => format!("loaded slot {slot}"),
-            Err(_) => format!("load failed {slot}"),
+            Ok(()) => format!("loaded {slot}"),
+            Err(_) => format!("failed {slot}"),
         },
-        Err(_) => format!("slot {slot} empty"),
+        Err(_) => format!("empty {slot}"),
     })
 }
 
