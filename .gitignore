@@ -11,3 +11,5 @@ docs/superpowers/
 !crates/termboy-gb/tests/roms/**/*.gbc
 *.gba
 !crates/termboy-gba/tests/roms/*.gba
+# mGBA suite is a local-only diagnostic (scripts/fetch-mgba-suite.sh), never committed.
+crates/termboy-gba/tests/roms-local/
