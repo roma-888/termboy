@@ -47,6 +47,12 @@ impl Playback {
         base.div_f64(self.multiplier())
     }
 
+    /// APU resample target (Hz) that keeps audio production matched to the
+    /// device at the current speed. See the test for the reasoning.
+    pub fn audio_rate(&self, host: u32) -> u32 {
+        (host as f64 / self.multiplier()).round() as u32
+    }
+
     pub fn toggle_mute(&mut self) {
         self.muted = !self.muted;
     }
@@ -113,6 +119,20 @@ mod tests {
         p.slower();
         p.slower();
         assert_eq!(p.frame_time(base), Duration::from_millis(40)); // 0.5x
+    }
+
+    #[test]
+    fn audio_rate_scales_inversely_with_speed() {
+        // The device drains `host` samples per wall-second; at speed S the core
+        // advances S emulated-seconds per wall-second, so it must resample to
+        // host/S to keep production matched to consumption (no underrun gaps).
+        let mut p = Playback::new();
+        assert_eq!(p.audio_rate(48_000), 48_000); // 1x
+        p.faster();
+        assert_eq!(p.audio_rate(48_000), 24_000); // 2x
+        p.slower();
+        p.slower();
+        assert_eq!(p.audio_rate(48_000), 96_000); // 0.5x
     }
 
     #[test]

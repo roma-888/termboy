@@ -62,8 +62,9 @@ shortcut sends the shifted number — `!@#…` on a US keyboard, or number+Shift
 kitty-protocol terminals; a state saved in one game won't load into another.)
 
 `+`/`-` step through `0.5x`, `1x`, `2x`, `4x` and a brief overlay shows the new
-speed. Audio keeps playing at every speed (choppy when fast-forwarding, gappy in
-slow motion); `M` mutes it outright. Speed resets to `1x` on the next game.
+speed. Audio follows the speed — pitch-shifted up when fast-forwarding, down in
+slow motion, like a tape — and stays gap-free at every speed; `M` mutes it
+outright. Speed resets to `1x` on the next game.
 
 Input feels best in a terminal supporting the kitty keyboard protocol
 (Ghostty, kitty, WezTerm, recent iTerm2/Alacritty) — real key-release events.

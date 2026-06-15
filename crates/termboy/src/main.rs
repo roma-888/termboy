@@ -536,9 +536,16 @@ fn run_game<C: Core>(
                     if k.code == KeyCode::Esc {
                         break 'game ExitCode::SUCCESS;
                     }
-                    let overlay = handle_slot_key(&k, &mut core, sav)
-                        .or_else(|| handle_playback_key(&k, &mut playback));
-                    if let Some(msg) = overlay {
+                    if let Some(msg) = handle_slot_key(&k, &mut core, sav) {
+                        screen.set_overlay(&msg);
+                        overlay_until = Instant::now() + Duration::from_millis(1500);
+                    } else if let Some(msg) = handle_playback_key(&k, &mut playback) {
+                        // A speed change moves the wall-clock frame rate, so
+                        // retarget the APU's resample rate to keep sample
+                        // production matched to the device — otherwise 0.5x
+                        // underruns into silence-laced crackle. (Mute leaves the
+                        // multiplier unchanged, so this is a no-op for it.)
+                        core.set_audio_rate(playback.audio_rate(audio.sample_rate));
                         screen.set_overlay(&msg);
                         overlay_until = Instant::now() + Duration::from_millis(1500);
                     } else {
