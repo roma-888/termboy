@@ -43,3 +43,13 @@ curl -sfL "$gba_base/ppu/hello.gba" -o "$gba_dest/hello.gba"
 curl -sfL "$gba_base/ppu/stripes.gba" -o "$gba_dest/stripes.gba"
 curl -sfL "$gba_base/ppu/shades.gba" -o "$gba_dest/shades.gba"
 echo "fetched gba-tests arm.gba + thumb.gba + hello.gba"
+
+# A1 functional-accuracy ROMs (jsmolka, MIT). Save ROMs are flattened to
+# save_<kind>.gba so the whole suite stays in one flat tests/roms/ dir.
+curl -sfL "$gba_base/memory/memory.gba"   -o "$gba_dest/memory.gba"
+curl -sfL "$gba_base/nes/nes.gba"         -o "$gba_dest/nes.gba"
+curl -sfL "$gba_base/save/none.gba"       -o "$gba_dest/save_none.gba"
+curl -sfL "$gba_base/save/sram.gba"       -o "$gba_dest/save_sram.gba"
+curl -sfL "$gba_base/save/flash64.gba"    -o "$gba_dest/save_flash64.gba"
+curl -sfL "$gba_base/save/flash128.gba"   -o "$gba_dest/save_flash128.gba"
+echo "fetched gba-tests memory/nes/save"

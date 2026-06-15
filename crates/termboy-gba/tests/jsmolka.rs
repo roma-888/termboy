@@ -33,3 +33,15 @@ fn jsmolka_thumb() {
     let cpu = run_to_idle("thumb.gba");
     assert_eq!(cpu.regs.get(7), 0, "thumb.gba failed at test {}", cpu.regs.get(7));
 }
+
+#[test]
+fn jsmolka_memory() {
+    let cpu = run_to_idle("memory.gba");
+    assert_eq!(cpu.regs.get(12), 0, "memory.gba failed at test {}", cpu.regs.get(12));
+}
+
+#[test]
+fn jsmolka_save_none() {
+    let cpu = run_to_idle("save_none.gba");
+    assert_eq!(cpu.regs.get(12), 0, "save/none.gba failed at test {}", cpu.regs.get(12));
+}
