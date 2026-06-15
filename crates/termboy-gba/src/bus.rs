@@ -1,6 +1,8 @@
-//! GBA memory map at coarse timing: every access is one cycle (real
-//! waitstates land in G7). Bus::catch_up walks scanline-granular timing
-//! events to drive rendering and IRQ sources between CPU steps.
+//! GBA memory map with per-access timing: each access costs its region's
+//! waitstated cycle count (timing.rs; WAITCNT-driven for the gamepak,
+//! sequential/non-sequential inferred from address continuity). Bus::catch_up
+//! walks scanline-granular timing events between CPU steps. The gamepak
+//! prefetch buffer remains a deferred non-goal.
 
 use crate::timing::{self, Width};
 
