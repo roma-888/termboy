@@ -37,6 +37,10 @@ impl Bus {
                 n
             };
             overflows = self.timer_advance(t, ticks);
+            // Timers 0/1 clock the Direct Sound FIFOs.
+            if t < 2 && overflows > 0 {
+                self.apu.on_timer_overflow(t, overflows as u32);
+            }
         }
     }
 

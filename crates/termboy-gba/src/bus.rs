@@ -29,6 +29,9 @@ pub struct Bus {
     pub(crate) timers: [crate::timers::Timer; 4],
     /// Cycle count the timers were last advanced to.
     pub(crate) timers_synced: u64,
+    pub(crate) apu: crate::apu::Apu,
+    /// Cycle count the APU was last advanced to.
+    apu_synced: u64,
     /// Set by HALTCNT / the Halt SWI; cleared when IE & IF intersect.
     pub halted: bool,
 }
@@ -52,7 +55,18 @@ impl Bus {
             dma: [crate::dma::Dma::default(); 4],
             timers: [crate::timers::Timer::default(); 4],
             timers_synced: 0,
+            apu: crate::apu::Apu::new(),
+            apu_synced: 0,
             halted: false,
+        }
+    }
+
+    /// Advance the APU by the elapsed cycle delta (called from catch_up).
+    pub(crate) fn apu_catch_up(&mut self) {
+        let elapsed = (self.cycles - self.apu_synced) as u32;
+        self.apu_synced = self.cycles;
+        if elapsed > 0 {
+            self.apu.tick(elapsed);
         }
     }
 
@@ -61,6 +75,7 @@ impl Bus {
     /// and timer ticks. Two events per line: line start and hblank.
     pub fn catch_up(&mut self) {
         self.timers_catch_up();
+        self.apu_catch_up();
         loop {
             let k = self.events_done;
             let at = (k / 2) * CYCLES_PER_LINE + (k % 2) * HBLANK_AT;
@@ -302,6 +317,8 @@ impl Bus {
             // Timer counters read live; their io slots hold the reload value
             0x100 | 0x104 | 0x108 | 0x10C => self.timers[(reg - 0x100) / 4].counter as u8,
             0x101 | 0x105 | 0x109 | 0x10D => (self.timers[(reg - 0x100) / 4].counter >> 8) as u8,
+            // Sound registers + wave RAM live in the APU
+            0x060..=0x085 | 0x090..=0x09F => self.apu.read(reg),
             _ => self.io[reg],
         }
     }
@@ -336,6 +353,12 @@ impl Bus {
                 self.io[reg] = value;
                 self.dma_ctrl_write(ch, was);
             }
+            // Sound: settle the APU to now, then apply the register change.
+            0x060..=0x085 | 0x090..=0x09F => {
+                self.apu_catch_up();
+                self.apu.write(reg, value);
+            }
+            0x0A0..=0x0A7 => self.apu.fifo_push((reg - 0x0A0) / 4, value),
             // HALTCNT: any write halts (bit 7 = Stop, same thing at coarse timing)
             0x301 => {
                 self.io[reg] = value;
