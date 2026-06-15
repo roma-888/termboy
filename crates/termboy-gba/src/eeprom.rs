@@ -5,6 +5,8 @@
 //! read-direction DMA is 68 units (4 dummy bits + 64 data bits). One 64-bit
 //! (8-byte) word per address.
 
+use termboy_core::state::{Reader, StateError, Writer};
+
 const MAX: usize = 0x2000; // 8KB, the larger variant
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -12,6 +14,24 @@ enum Mode {
     Idle,
     Receiving, // accumulating a command bitstream (DMA -> EEPROM)
     Reading,   // emitting a read reply (DMA <- EEPROM)
+}
+
+impl Mode {
+    fn as_u8(self) -> u8 {
+        match self {
+            Mode::Idle => 0,
+            Mode::Receiving => 1,
+            Mode::Reading => 2,
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Mode::Receiving,
+            2 => Mode::Reading,
+            _ => Mode::Idle,
+        }
+    }
 }
 
 pub struct Eeprom {
@@ -139,6 +159,29 @@ impl Eeprom {
         let n = data.len().min(MAX);
         self.data[..n].copy_from_slice(&data[..n]);
     }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_bytes(&self.data[..]);
+        w.put_u8(self.addr_bits);
+        w.put_u8(self.mode.as_u8());
+        w.put_u32(self.rx.len() as u32);
+        w.put_bytes(&self.rx);
+        w.put_u32(self.expected);
+        w.put_u64(self.read_word);
+        w.put_u32(self.read_pos);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.data.copy_from_slice(r.get_bytes(MAX)?);
+        self.addr_bits = r.get_u8()?;
+        self.mode = Mode::from_u8(r.get_u8()?);
+        let n = r.get_u32()? as usize;
+        self.rx = r.get_bytes(n)?.to_vec();
+        self.expected = r.get_u32()?;
+        self.read_word = r.get_u64()?;
+        self.read_pos = r.get_u32()?;
+        Ok(())
+    }
 }
 
 impl Default for Eeprom {
@@ -235,5 +278,30 @@ mod tests {
         assert_eq!(e.addr_bits, 14);
         send(&mut e, &read_req(0, 14));
         assert_eq!(read_word(&mut e) & 0xFF, 0x5A);
+    }
+
+    #[test]
+    fn serialize_deserialize_round_trips() {
+        use termboy_core::state::{Reader, Writer};
+        // Drive the device into a non-default state: write a word (sets
+        // addr_bits/data) and leave a partial command in rx + Receiving mode.
+        let mut e = Eeprom::new();
+        send(&mut e, &write_req(42, 14, 0xCAFE_F00D_1234_5678));
+        e.begin(81, true); // arm a receive; push a couple of bits, don't finish
+        e.write_bit(1);
+        e.write_bit(0);
+        e.read_word = 0xDEAD_BEEF_0000_FFFF;
+        e.read_pos = 7;
+
+        let mut w = Writer::new();
+        e.serialize(&mut w);
+
+        let mut fresh = Eeprom::new();
+        let mut r = Reader::new(&w.buf);
+        fresh.deserialize(&mut r).unwrap();
+
+        let mut w2 = Writer::new();
+        fresh.serialize(&mut w2);
+        assert_eq!(w.buf, w2.buf);
     }
 }

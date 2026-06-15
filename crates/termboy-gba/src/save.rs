@@ -4,6 +4,7 @@
 
 use crate::eeprom::Eeprom;
 use crate::flash::{Flash, FlashKind};
+use termboy_core::state::{Reader, StateError, Writer};
 
 const SRAM_SIZE: usize = 0x8000; // 32KB
 
@@ -83,6 +84,29 @@ impl Save {
     pub fn eeprom_begin(&mut self, count: u32, to_eeprom: bool) {
         if let Save::Eeprom(e) = self {
             e.begin(count, to_eeprom);
+        }
+    }
+
+    /// No variant tag: the ROM (reloaded on restore) fixes which backend exists.
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        match self {
+            Save::None => {}
+            Save::Sram(d) => w.put_bytes(&d[..]),
+            Save::Flash(f) => f.serialize(w),
+            Save::Eeprom(e) => e.serialize(w),
+        }
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        match self {
+            Save::None => Ok(()),
+            Save::Sram(d) => {
+                let n = d.len();
+                d.copy_from_slice(r.get_bytes(n)?);
+                Ok(())
+            }
+            Save::Flash(f) => f.deserialize(r),
+            Save::Eeprom(e) => e.deserialize(r),
         }
     }
 }

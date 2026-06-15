@@ -5,6 +5,7 @@
 //! prefetch buffer remains a deferred non-goal.
 
 use crate::timing::{self, Width};
+use termboy_core::state::{Reader, StateError, Writer};
 
 pub(crate) const CYCLES_PER_LINE: u64 = 1232;
 pub(crate) const LINES: u64 = 228;
@@ -442,6 +443,60 @@ impl Bus {
             }
             _ => self.io[reg] = value,
         }
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        // rom is never serialized — it is reloaded and guarded by the rom_id header.
+        w.put_bytes(&self.ewram[..]);
+        w.put_bytes(&self.iwram[..]);
+        w.put_bytes(&self.io[..]);
+        w.put_bytes(&self.palette[..]);
+        w.put_bytes(&self.vram[..]);
+        w.put_bytes(&self.oam[..]);
+        self.save.serialize(w);
+        w.put_u16(self.keyinput);
+        self.ppu.serialize(w);
+        w.put_u64(self.cycles);
+        w.put_u32(self.seq_next);
+        w.put_bool(self.nonseq);
+        w.put_u64(self.events_done);
+        for d in &self.dma {
+            d.serialize(w);
+        }
+        for t in &self.timers {
+            t.serialize(w);
+        }
+        w.put_u64(self.timers_synced);
+        self.apu.serialize(w);
+        w.put_u64(self.apu_synced);
+        w.put_bool(self.halted);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.ewram.copy_from_slice(r.get_bytes(0x4_0000)?);
+        self.iwram.copy_from_slice(r.get_bytes(0x8000)?);
+        self.io.copy_from_slice(r.get_bytes(0x400)?);
+        self.palette.copy_from_slice(r.get_bytes(0x400)?);
+        self.vram.copy_from_slice(r.get_bytes(0x1_8000)?);
+        self.oam.copy_from_slice(r.get_bytes(0x400)?);
+        self.save.deserialize(r)?;
+        self.keyinput = r.get_u16()?;
+        self.ppu.deserialize(r)?;
+        self.cycles = r.get_u64()?;
+        self.seq_next = r.get_u32()?;
+        self.nonseq = r.get_bool()?;
+        self.events_done = r.get_u64()?;
+        for d in &mut self.dma {
+            d.deserialize(r)?;
+        }
+        for t in &mut self.timers {
+            t.deserialize(r)?;
+        }
+        self.timers_synced = r.get_u64()?;
+        self.apu.deserialize(r)?;
+        self.apu_synced = r.get_u64()?;
+        self.halted = r.get_bool()?;
+        Ok(())
     }
 }
 

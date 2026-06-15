@@ -9,6 +9,7 @@ mod obj;
 mod tests;
 
 use termboy_core::Rgb;
+use termboy_core::state::{Reader, StateError, Writer};
 
 use crate::bus::Bus;
 
@@ -53,6 +54,28 @@ impl Ppu {
             bg_ref: [(0, 0); 2],
             bg_ref_dirty: [true, true],
         }
+    }
+
+    /// Only the latched affine state persists; frame/scratch is regenerated.
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        for &(x, y) in &self.bg_ref {
+            w.put_u32(x as u32);
+            w.put_u32(y as u32);
+        }
+        for &d in &self.bg_ref_dirty {
+            w.put_bool(d);
+        }
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        for bg in &mut self.bg_ref {
+            bg.0 = r.get_u32()? as i32;
+            bg.1 = r.get_u32()? as i32;
+        }
+        for d in &mut self.bg_ref_dirty {
+            *d = r.get_bool()?;
+        }
+        Ok(())
     }
 }
 

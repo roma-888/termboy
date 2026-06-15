@@ -14,6 +14,7 @@ pub mod save;
 pub mod timers;
 pub mod timing;
 
+use termboy_core::state::{Reader, StateError, Writer};
 use termboy_core::{Buttons, Core, FrameBuffer};
 
 use crate::bus::Bus;
@@ -29,6 +30,7 @@ pub const CLOCK_HZ: u64 = 16_777_216;
 pub struct GbaCore {
     cpu: Cpu,
     frame: FrameBuffer,
+    rom_id: u64,
 }
 
 impl GbaCore {
@@ -36,9 +38,11 @@ impl GbaCore {
         if rom.len() < 0xC0 {
             return Err("ROM is too small to contain a GBA cartridge header".into());
         }
+        let rom_id = termboy_core::state::rom_id(&rom);
         Ok(Self {
             cpu: Cpu::new(Bus::new(rom)),
             frame: FrameBuffer::new(ppu::WIDTH, ppu::HEIGHT),
+            rom_id,
         })
     }
 
@@ -106,5 +110,32 @@ impl Core for GbaCore {
 
     fn set_audio_rate(&mut self, hz: u32) {
         self.cpu.bus.apu.set_sample_rate(hz);
+    }
+
+    fn save_state(&self) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.put_bytes(b"TBSS");
+        w.put_u16(termboy_core::STATE_VERSION);
+        w.put_u8(1); // console 1 = GBA
+        w.put_u64(self.rom_id);
+        self.cpu.serialize(&mut w);
+        w.buf
+    }
+
+    fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {
+        let mut r = Reader::new(data);
+        if r.get_bytes(4)? != b"TBSS" {
+            return Err(StateError::BadMagic);
+        }
+        if r.get_u16()? != termboy_core::STATE_VERSION {
+            return Err(StateError::BadVersion);
+        }
+        if r.get_u8()? != 1 {
+            return Err(StateError::WrongConsole);
+        }
+        if r.get_u64()? != self.rom_id {
+            return Err(StateError::WrongRom);
+        }
+        self.cpu.deserialize(&mut r)
     }
 }

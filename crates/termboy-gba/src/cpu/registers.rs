@@ -3,6 +3,7 @@
 //! address (see cpu/mod.rs for the pipeline convention).
 
 use super::psr::{Mode, Psr};
+use termboy_core::state::{Reader, StateError, Writer};
 
 pub struct Registers {
     r: [u32; 16],
@@ -139,6 +140,63 @@ impl Registers {
             _ if i == 13 || i == 14 => self.bank_usr[i - 8] = v,
             _ => self.r[i] = v,
         }
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        for &v in &self.r {
+            w.put_u32(v);
+        }
+        for &v in &self.bank_usr {
+            w.put_u32(v);
+        }
+        for &v in &self.bank_fiq {
+            w.put_u32(v);
+        }
+        for &v in &self.bank_irq {
+            w.put_u32(v);
+        }
+        for &v in &self.bank_svc {
+            w.put_u32(v);
+        }
+        for &v in &self.bank_abt {
+            w.put_u32(v);
+        }
+        for &v in &self.bank_und {
+            w.put_u32(v);
+        }
+        w.put_u32(self.cpsr.0);
+        for p in &self.spsr {
+            w.put_u32(p.0);
+        }
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        for v in &mut self.r {
+            *v = r.get_u32()?;
+        }
+        for v in &mut self.bank_usr {
+            *v = r.get_u32()?;
+        }
+        for v in &mut self.bank_fiq {
+            *v = r.get_u32()?;
+        }
+        for v in &mut self.bank_irq {
+            *v = r.get_u32()?;
+        }
+        for v in &mut self.bank_svc {
+            *v = r.get_u32()?;
+        }
+        for v in &mut self.bank_abt {
+            *v = r.get_u32()?;
+        }
+        for v in &mut self.bank_und {
+            *v = r.get_u32()?;
+        }
+        self.cpsr = Psr(r.get_u32()?);
+        for p in &mut self.spsr {
+            *p = Psr(r.get_u32()?);
+        }
+        Ok(())
     }
 }
 

@@ -3,6 +3,7 @@
 //! this); reload registers live in the io array, live counters here.
 
 use crate::bus::Bus;
+use termboy_core::state::{Reader, StateError, Writer};
 
 const PRESCALE: [u64; 4] = [1, 64, 256, 1024];
 
@@ -11,6 +12,19 @@ pub struct Timer {
     pub(crate) counter: u16,
     /// Cycles accumulated toward the next prescaler tick.
     pub(crate) rem: u64,
+}
+
+impl Timer {
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_u16(self.counter);
+        w.put_u64(self.rem);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.counter = r.get_u16()?;
+        self.rem = r.get_u64()?;
+        Ok(())
+    }
 }
 
 impl Bus {

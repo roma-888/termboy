@@ -2,6 +2,8 @@
 //! use to identify, erase, and program the chip. Two sizes: 64KB (one bank)
 //! and 128KB (two 64KB banks selected by a bank-switch command).
 
+use termboy_core::state::{Reader, StateError, Writer};
+
 const BANK: usize = 0x1_0000;
 
 /// 512Kbit (64KB) vs 1Mbit (128KB). The reported device ID tells the game
@@ -19,6 +21,28 @@ enum Phase {
     Unlock2, // saw 0x55 at 0x2AAA
     Program, // 0xA0: the next write is one data byte
     Bank,    // 0xB0: the next write selects the 64KB bank
+}
+
+impl Phase {
+    fn as_u8(self) -> u8 {
+        match self {
+            Phase::Ready => 0,
+            Phase::Unlock1 => 1,
+            Phase::Unlock2 => 2,
+            Phase::Program => 3,
+            Phase::Bank => 4,
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Phase::Unlock1,
+            2 => Phase::Unlock2,
+            3 => Phase::Program,
+            4 => Phase::Bank,
+            _ => Phase::Ready,
+        }
+    }
 }
 
 pub struct Flash {
@@ -59,6 +83,24 @@ impl Flash {
     pub fn load(&mut self, data: &[u8]) {
         let n = data.len().min(self.data.len());
         self.data[..n].copy_from_slice(&data[..n]);
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_bytes(&self.data);
+        w.put_u8(self.phase.as_u8());
+        w.put_bool(self.id_mode);
+        w.put_bool(self.erase_armed);
+        w.put_u32(self.bank as u32);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        let n = self.data.len();
+        self.data.copy_from_slice(r.get_bytes(n)?);
+        self.phase = Phase::from_u8(r.get_u8()?);
+        self.id_mode = r.get_bool()?;
+        self.erase_armed = r.get_bool()?;
+        self.bank = r.get_u32()? as usize;
+        Ok(())
     }
 
     pub fn read(&self, addr: u32) -> u8 {

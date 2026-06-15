@@ -4,6 +4,7 @@
 //! (sound FIFO / video capture) is inert until G6.
 
 use crate::bus::Bus;
+use termboy_core::state::{Reader, StateError, Writer};
 
 const CNT_H: [usize; 4] = [0x0BA, 0x0C6, 0x0D2, 0x0DE];
 
@@ -14,6 +15,23 @@ pub struct Dma {
     dst: u32,
     count: u32,
     pub(crate) pending: bool,
+}
+
+impl Dma {
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        w.put_u32(self.src);
+        w.put_u32(self.dst);
+        w.put_u32(self.count);
+        w.put_bool(self.pending);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.src = r.get_u32()?;
+        self.dst = r.get_u32()?;
+        self.count = r.get_u32()?;
+        self.pending = r.get_bool()?;
+        Ok(())
+    }
 }
 
 impl Bus {

@@ -8,6 +8,7 @@ pub mod tests;
 use crate::bus::Bus;
 use psr::{I, Mode, T};
 use registers::Registers;
+use termboy_core::state::{Reader, StateError, Writer};
 
 /// Where the real BIOS resumes after a user ISR returns (the ldmfd/subs shim).
 pub(crate) const BIOS_IRQ_RETURN: u32 = 0x138;
@@ -282,5 +283,28 @@ impl Cpu {
     pub(crate) fn load_rotated(&mut self, addr: u32) -> u32 {
         let value = self.bus.read32(addr & !3);
         value.rotate_right((addr & 3) * 8)
+    }
+
+    pub(crate) fn serialize(&self, w: &mut Writer) {
+        self.regs.serialize(w);
+        w.put_u32(self.pipeline[0]);
+        w.put_u32(self.pipeline[1]);
+        w.put_bool(self.flushed);
+        w.put_bool(self.hle_bios);
+        w.put_bool(self.intrwait.is_some());
+        w.put_u16(self.intrwait.unwrap_or(0));
+        self.bus.serialize(w);
+    }
+
+    pub(crate) fn deserialize(&mut self, r: &mut Reader) -> Result<(), StateError> {
+        self.regs.deserialize(r)?;
+        self.pipeline[0] = r.get_u32()?;
+        self.pipeline[1] = r.get_u32()?;
+        self.flushed = r.get_bool()?;
+        self.hle_bios = r.get_bool()?;
+        let some = r.get_bool()?;
+        let v = r.get_u16()?;
+        self.intrwait = some.then_some(v);
+        self.bus.deserialize(r)
     }
 }
