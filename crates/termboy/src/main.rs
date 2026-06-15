@@ -6,6 +6,7 @@
 mod audio;
 mod input;
 mod menu;
+mod playback;
 mod screen;
 
 use std::io::Write as _;
@@ -35,7 +36,8 @@ options:
   --headless         run without UI, print serial output (debug tool)
   -h, --help         show this help
 
-controls: arrows = D-pad, X = A, Z = B, A/S = L/R, Enter = Start, Tab = Select, Esc = quit";
+controls: arrows = D-pad, X = A, Z = B, A/S = L/R, Enter = Start, Tab = Select
+          +/- = speed (0.5x-4x), M = mute, Esc = quit";
 
 fn parse_palette(name: &str) -> Option<[Rgb; 4]> {
     match name {
@@ -109,6 +111,23 @@ fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<St
         },
         Err(_) => format!("empty {slot}"),
     })
+}
+
+/// If `k` is a playback control, apply it and return the overlay badge to
+/// flash. `+`/`=` speed up, `-`/`_` slow down, `m` toggles audio mute. Like the
+/// save-state digits, these keys are reserved — they never reach the game.
+fn handle_playback_key(k: &KeyEvent, pb: &mut playback::Playback) -> Option<String> {
+    let KeyCode::Char(c) = k.code else { return None };
+    match c {
+        '+' | '=' => pb.faster(),
+        '-' | '_' => pb.slower(),
+        'm' => {
+            pb.toggle_mute();
+            return Some(pb.mute_label().to_string());
+        }
+        _ => return None,
+    }
+    Some(pb.speed_label())
 }
 
 /// Atomic write: a crash mid-write must never corrupt an existing save.
@@ -506,6 +525,7 @@ fn run_game<C: Core>(
     let mut last_saved: Option<Vec<u8>> = core.save_ram();
     let mut frames: u32 = 0;
     let mut overlay_until = Instant::now();
+    let mut playback = playback::Playback::new();
     let code = 'game: loop {
         // Input: Esc quits, number keys drive save-state slots, the rest goes
         // to the button tracker.
@@ -516,7 +536,9 @@ fn run_game<C: Core>(
                     if k.code == KeyCode::Esc {
                         break 'game ExitCode::SUCCESS;
                     }
-                    if let Some(msg) = handle_slot_key(&k, &mut core, sav) {
+                    let overlay = handle_slot_key(&k, &mut core, sav)
+                        .or_else(|| handle_playback_key(&k, &mut playback));
+                    if let Some(msg) = overlay {
                         screen.set_overlay(&msg);
                         overlay_until = Instant::now() + Duration::from_millis(1500);
                     } else {
@@ -565,7 +587,11 @@ fn run_game<C: Core>(
         out.clear();
         screen.render(fb, &mut out);
         core.drain_audio(&mut audio_buf);
-        audio.push(&mut audio_buf);
+        if playback.is_muted() {
+            audio_buf.clear();
+        } else {
+            audio.push(&mut audio_buf);
+        }
         if !out.is_empty() {
             print!("{out}");
             std::io::stdout().flush().ok();
@@ -576,7 +602,9 @@ fn run_game<C: Core>(
             flush_save(&core, sav, &mut last_saved); // every ~5 seconds
         }
 
-        next_frame += FRAME_TIME;
+        // Speed scales the interval between frames; a speed change takes effect
+        // on the very next wait, so no anchor reset is needed.
+        next_frame += playback.frame_time(FRAME_TIME);
         let now = Instant::now();
         if next_frame > now {
             std::thread::sleep(next_frame - now);

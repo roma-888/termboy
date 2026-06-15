@@ -52,12 +52,18 @@ throughput -- <rom.gba>`. That completes the GBA roadmap — cycle-exact timing
 | S | R (GBA) |
 | `1`–`0` | Save state to slot 1–10 |
 | Shift + `1`–`0` | Load state from that slot |
+| `+` / `-` | Speed up / slow down (0.5x, 1x, 2x, 4x) |
+| M | Toggle audio mute |
 | Esc | Quit |
 
 Save states capture the full machine and persist to `<rom>.ss0`…`<rom>.ss9`, so
 they survive quitting. A brief overlay confirms each save/load. (The load
 shortcut sends the shifted number — `!@#…` on a US keyboard, or number+Shift in
 kitty-protocol terminals; a state saved in one game won't load into another.)
+
+`+`/`-` step through `0.5x`, `1x`, `2x`, `4x` and a brief overlay shows the new
+speed. Audio keeps playing at every speed (choppy when fast-forwarding, gappy in
+slow motion); `M` mutes it outright. Speed resets to `1x` on the next game.
 
 Input feels best in a terminal supporting the kitty keyboard protocol
 (Ghostty, kitty, WezTerm, recent iTerm2/Alacritty) — real key-release events.
