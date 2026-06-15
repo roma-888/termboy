@@ -12,6 +12,7 @@ pub mod keypad;
 pub mod ppu;
 pub mod save;
 pub mod timers;
+pub mod timing;
 
 use termboy_core::{Buttons, Core, FrameBuffer};
 
