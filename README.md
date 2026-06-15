@@ -26,7 +26,11 @@ affine helpers, …), and audio — the four PSG channels plus both Direct Sound
 DMA-FIFO channels. Pokémon boots through its intro to the title screen, plays its
 music, and reaches the in-game menus. Battery saves persist for every cartridge
 save type — SRAM, Flash (64K/128K), and EEPROM (4K/64K) — auto-detected from the
-ROM and written to `<rom>.sav`. Remaining: a cycle-timing/performance pass.
+ROM and written to `<rom>.sav`. In release builds the core emulates well above
+real time (~6× on Apple Silicon) with an allocation-free per-frame loop, so games
+play at full speed; measure with `cargo run --release -p termboy-gba --example
+throughput -- <rom.gba>`. That completes the GBA roadmap — cycle-exact timing
+(waitstate/prefetch accuracy) is a deliberate non-goal.
 
 - `cargo run --release -p termboy` — opens a game picker for `./roms` (GB/GBC/GBA, grouped by hardware; no argument needed)
 - `cargo run --release -p termboy -- <rom>` — play a `.gb`/`.gbc`/`.gba` directly (pixel-perfect when it fits, auto-scaled to fit below that; `--exact` disables scaling)
