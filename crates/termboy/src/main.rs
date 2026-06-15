@@ -102,9 +102,11 @@ fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<St
     };
     let slot = load_slot?;
     Some(match std::fs::read(ss_path(sav, slot)) {
+        // The overlay font is short on purpose (it scales up to stay readable),
+        // so keep messages terse: the StateError detail is dropped here.
         Ok(d) => match core.load_state(&d) {
             Ok(()) => format!("loaded slot {slot}"),
-            Err(e) => format!("load failed: {e}"),
+            Err(_) => format!("load failed {slot}"),
         },
         Err(_) => format!("slot {slot} empty"),
     })

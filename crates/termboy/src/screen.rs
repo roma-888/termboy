@@ -152,9 +152,111 @@ impl Screen {
         // Draw the overlay last so it sits on top of the frame. It writes at a
         // fixed position without touching `prev`; clear_overlay() invalidates
         // to repaint the covered cells once it expires.
-        if let Some(msg) = &self.overlay {
-            write!(out, "\x1b[1;1H\x1b[97;44m {msg} \x1b[0m").unwrap();
+        if let Some(msg) = self.overlay.clone() {
+            self.draw_overlay(&msg, out);
         }
+    }
+
+    /// Render `msg` as scaled pixel-blocks near the top-left of the image. The
+    /// glyph size scales with the viewport (not the terminal font), so the text
+    /// stays a roughly constant fraction of the screen whether the user has
+    /// zoomed in or out for sharpness — and it shrinks to fit narrow viewports.
+    fn draw_overlay(&self, msg: &str, out: &mut String) {
+        use std::fmt::Write;
+        let chars: Vec<char> = msg.chars().collect();
+        if chars.is_empty() {
+            return;
+        }
+        // Each font pixel is `w` cols x `h` rows; cells are ~twice as tall as
+        // wide, so w = 2h keeps the blocks roughly square. Target ~1/12 of the
+        // height, then shrink until the message fits the width.
+        let cols_per_char = (GLYPH_W + 1) * 2; // (glyph + 1-px gap) at w=2 per font px
+        let mut h = (self.rows / 12).max(1);
+        while h > 1 && chars.len() * cols_per_char * h > self.cols.saturating_sub(2) {
+            h -= 1;
+        }
+        let (cw, ch) = (2 * h, h); // font-pixel size in cells
+        let pad = h;
+        let text_w = chars.len() * (GLYPH_W + 1) * cw - cw; // no trailing gap
+        let box_w = (text_w + 2 * pad).min(self.cols);
+        let box_h = GLYPH_H * ch + 2 * pad;
+        // Build a box of "is this cell lit?" then emit it row by row over the
+        // frame, coalescing color runs. Lit = a glyph pixel (white); the rest
+        // of the box is a dark backdrop for contrast.
+        for by in 0..box_h.min(self.rows) {
+            let term_row = self.off_r + by + 1;
+            write!(out, "\x1b[{};{}H", term_row, self.off_c + 1).unwrap();
+            let mut cur: Option<bool> = None;
+            for bx in 0..box_w {
+                let lit = {
+                    let (px, py) = (bx as isize - pad as isize, by as isize - pad as isize);
+                    if px < 0 || py < 0 {
+                        false
+                    } else {
+                        let (fcol, frow) = (px as usize / cw, py as usize / ch);
+                        let ci = fcol / (GLYPH_W + 1);
+                        let col_in = fcol % (GLYPH_W + 1);
+                        ci < chars.len()
+                            && col_in < GLYPH_W
+                            && frow < GLYPH_H
+                            && glyph(chars[ci])[frow].as_bytes()[col_in] == b'#'
+                    }
+                };
+                if cur != Some(lit) {
+                    out.push_str(if lit { "\x1b[48;2;255;255;255m" } else { "\x1b[48;2;0;0;0m" });
+                    cur = Some(lit);
+                }
+                out.push(' ');
+            }
+            out.push_str("\x1b[0m");
+        }
+    }
+}
+
+/// 3x5 uppercase pixel font for the overlay. Unknown chars render as a box.
+const GLYPH_W: usize = 3;
+const GLYPH_H: usize = 5;
+
+fn glyph(c: char) -> [&'static str; 5] {
+    match c.to_ascii_uppercase() {
+        ' ' => ["   ", "   ", "   ", "   ", "   "],
+        '0' => ["###", "# #", "# #", "# #", "###"],
+        '1' => [" # ", "## ", " # ", " # ", "###"],
+        '2' => ["###", "  #", "###", "#  ", "###"],
+        '3' => ["###", "  #", "###", "  #", "###"],
+        '4' => ["# #", "# #", "###", "  #", "  #"],
+        '5' => ["###", "#  ", "###", "  #", "###"],
+        '6' => ["###", "#  ", "###", "# #", "###"],
+        '7' => ["###", "  #", "  #", "  #", "  #"],
+        '8' => ["###", "# #", "###", "# #", "###"],
+        '9' => ["###", "# #", "###", "  #", "###"],
+        'A' => ["###", "# #", "###", "# #", "# #"],
+        'B' => ["## ", "# #", "## ", "# #", "## "],
+        'C' => ["###", "#  ", "#  ", "#  ", "###"],
+        'D' => ["## ", "# #", "# #", "# #", "## "],
+        'E' => ["###", "#  ", "###", "#  ", "###"],
+        'F' => ["###", "#  ", "###", "#  ", "#  "],
+        'G' => ["###", "#  ", "# #", "# #", "###"],
+        'H' => ["# #", "# #", "###", "# #", "# #"],
+        'I' => ["###", " # ", " # ", " # ", "###"],
+        'J' => ["  #", "  #", "  #", "# #", "###"],
+        'K' => ["# #", "# #", "## ", "# #", "# #"],
+        'L' => ["#  ", "#  ", "#  ", "#  ", "###"],
+        'M' => ["# #", "###", "###", "# #", "# #"],
+        'N' => ["# #", "## ", "# #", "# #", "# #"],
+        'O' => ["###", "# #", "# #", "# #", "###"],
+        'P' => ["###", "# #", "###", "#  ", "#  "],
+        'Q' => ["###", "# #", "# #", "###", "  #"],
+        'R' => ["## ", "# #", "## ", "# #", "# #"],
+        'S' => ["###", "#  ", "###", "  #", "###"],
+        'T' => ["###", " # ", " # ", " # ", " # "],
+        'U' => ["# #", "# #", "# #", "# #", "###"],
+        'V' => ["# #", "# #", "# #", "# #", " # "],
+        'W' => ["# #", "# #", "###", "###", "# #"],
+        'X' => ["# #", "# #", " # ", "# #", "# #"],
+        'Y' => ["# #", "# #", " # ", " # ", " # "],
+        'Z' => ["###", "  #", " # ", "#  ", "###"],
+        _ => ["###", "# #", "# #", "# #", "###"],
     }
 }
 
@@ -208,12 +310,35 @@ mod tests {
     }
 
     #[test]
-    fn overlay_draws_text_over_the_frame() {
-        let mut s = Screen::new(8, 4);
+    fn overlay_draws_pixels_over_an_unchanged_frame() {
+        let mut s = Screen::new(64, 32);
+        let fb = FrameBuffer::new(64, 32);
         let mut out = String::new();
-        s.set_overlay("hi");
-        s.render(&FrameBuffer::new(8, 4), &mut out);
-        assert!(out.contains("hi"));
+        s.render(&fb, &mut out); // first render paints every cell
+        out.clear();
+        s.render(&fb, &mut out); // identical frame: nothing to redraw
+        assert!(out.is_empty());
+        // With an overlay set, the same unchanged frame now emits its pixels
+        // (white-lit glyph cells over a dark backdrop).
+        s.set_overlay("save");
+        s.render(&fb, &mut out);
+        assert!(out.contains("\x1b[48;2;255;255;255m")); // a lit glyph cell
+    }
+
+    #[test]
+    fn clear_overlay_repaints_the_covered_cells() {
+        let mut s = Screen::new(64, 32);
+        let fb = FrameBuffer::new(64, 32);
+        let mut out = String::new();
+        s.render(&fb, &mut out);
+        s.set_overlay("save");
+        out.clear();
+        s.render(&fb, &mut out);
+        assert!(!out.is_empty());
+        s.clear_overlay(); // invalidates
+        out.clear();
+        s.render(&fb, &mut out);
+        assert!(!out.is_empty()); // full repaint clears the overlay
     }
 
     #[test]
