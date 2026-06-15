@@ -23,9 +23,9 @@ backgrounds, regular and affine sprites, windows, alpha/brightness blending,
 mosaic), all four DMA channels, cascading timers, the IE/IF/IME interrupt system,
 and an HLE BIOS (IntrWait, CpuSet, LZ77/Huffman decompression, affine helpers, …).
 Pokémon boots through its intro to the title screen and in-game menus. Battery
-saves persist for Flash and SRAM carts (auto-detected from the ROM, written to
-`<rom>.sav`). Not yet implemented: EEPROM saves, GBA audio, and a
-cycle-timing/performance pass.
+saves persist for every cartridge save type — SRAM, Flash (64K/128K), and
+EEPROM (4K/64K) — auto-detected from the ROM and written to `<rom>.sav`. Not
+yet implemented: GBA audio and a cycle-timing/performance pass.
 
 - `cargo run --release -p termboy` — opens a game picker for `./roms` (GB/GBC/GBA, grouped by hardware; no argument needed)
 - `cargo run --release -p termboy -- <rom>` — play a `.gb`/`.gbc`/`.gba` directly (pixel-perfect when it fits, auto-scaled to fit below that; `--exact` disables scaling)
