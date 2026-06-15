@@ -9,8 +9,8 @@ renderer (with true full-color images on kitty-graphics terminals) and
 auto-scaling, a ROM picker grouped by hardware, configurable input, audio,
 battery saves, save-state slots, adjustable play speed, and rewind.
 
-<!-- Demo recording — regenerate with `vhs assets/demo.tape` (see that file). -->
-![termboy demo](assets/demo.gif)
+<!-- Demo GIF slot: run `vhs assets/demo.tape` to produce assets/demo.gif on a
+     real terminal, then add:  ![termboy demo](assets/demo.gif) -->
 
 ## Install
 
