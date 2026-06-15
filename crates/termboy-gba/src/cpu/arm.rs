@@ -110,7 +110,7 @@ impl Cpu {
             v
         } else {
             let v = self.load_rotated(addr);
-            self.bus.write32(addr & !3, rm);
+            self.bus.write32(addr,rm);
             v
         };
         self.bus.idle();
@@ -135,7 +135,7 @@ impl Cpu {
         let addr = if p { offset_addr } else { base };
         if l {
             let value = match (op >> 5) & 3 {
-                1 => (self.bus.read16(addr & !1) as u32).rotate_right((addr & 1) * 8), // LDRH
+                1 => (self.bus.read16(addr) as u32).rotate_right((addr & 1) * 8), // LDRH
                 2 => self.bus.read8(addr) as i8 as i32 as u32,                         // LDRSB
                 _ => {
                     // LDRSH; misaligned degrades to LDRSB on ARM7
@@ -155,9 +155,11 @@ impl Cpu {
                 self.flush();
             }
         } else {
-            // STRH (SH=01 is the only store form that reaches here)
+            // STRH (SH=01 is the only store form that reaches here). The bus
+            // owns alignment: it re-aligns normal regions but uses the low
+            // address bit to pick the byte lane in the 8-bit save region.
             let value = self.regs.get(rd).wrapping_add(if rd == 15 { 4 } else { 0 });
-            self.bus.write16(addr & !1, value as u16);
+            self.bus.write16(addr, value as u16);
             if !p || w {
                 self.regs.set(rn, offset_addr);
             }
@@ -321,7 +323,7 @@ impl Cpu {
             if b {
                 self.bus.write8(addr, value as u8);
             } else {
-                self.bus.write32(addr & !3, value);
+                self.bus.write32(addr,value);
             }
             if !p || w {
                 self.regs.set(rn, offset_addr);

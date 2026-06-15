@@ -45,3 +45,21 @@ fn jsmolka_save_none() {
     let cpu = run_to_idle("save_none.gba");
     assert_eq!(cpu.regs.get(12), 0, "save/none.gba failed at test {}", cpu.regs.get(12));
 }
+
+#[test]
+fn jsmolka_save_sram() {
+    let cpu = run_to_idle("save_sram.gba");
+    assert_eq!(cpu.regs.get(12), 0, "save/sram.gba failed at test {}", cpu.regs.get(12));
+}
+
+#[test]
+fn jsmolka_save_flash64() {
+    let cpu = run_to_idle("save_flash64.gba");
+    assert_eq!(cpu.regs.get(12), 0, "save/flash64.gba failed at test {}", cpu.regs.get(12));
+}
+
+#[test]
+fn jsmolka_save_flash128() {
+    let cpu = run_to_idle("save_flash128.gba");
+    assert_eq!(cpu.regs.get(12), 0, "save/flash128.gba failed at test {}", cpu.regs.get(12));
+}

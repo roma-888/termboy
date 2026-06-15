@@ -191,7 +191,7 @@ impl Cpu {
             .wrapping_add(self.regs.get(((op >> 6) & 7) as usize));
         let rd = (op & 7) as usize;
         match (op >> 10) & 3 {
-            0 => { let v = self.regs.get(rd); self.bus.write32(addr & !3, v); } // STR
+            0 => { let v = self.regs.get(rd); self.bus.write32(addr, v); } // STR
             1 => { let v = self.regs.get(rd); self.bus.write8(addr, v as u8); } // STRB
             2 => {
                 // LDR
@@ -219,7 +219,7 @@ impl Cpu {
             0 => {
                 // STRH
                 let v = self.regs.get(rd);
-                self.bus.write16(addr & !1, v as u16);
+                self.bus.write16(addr, v as u16);
             }
             1 => {
                 // LDRSB
@@ -229,7 +229,7 @@ impl Cpu {
             }
             2 => {
                 // LDRH (misaligned rotates, same as ARM)
-                let v = (self.bus.read16(addr & !1) as u32).rotate_right((addr & 1) * 8);
+                let v = (self.bus.read16(addr) as u32).rotate_right((addr & 1) * 8);
                 self.bus.idle();
                 self.regs.set(rd, v);
             }
@@ -260,7 +260,7 @@ impl Cpu {
                 self.regs.set(rd, v);
             } else {
                 let v = self.regs.get(rd);
-                self.bus.write32(addr & !3, v);
+                self.bus.write32(addr, v);
             }
         } else {
             let addr = rb.wrapping_add(imm);
@@ -283,12 +283,12 @@ impl Cpu {
             .wrapping_add((((op >> 6) & 0x1F) as u32) * 2);
         let rd = (op & 7) as usize;
         if op & (1 << 11) != 0 {
-            let v = (self.bus.read16(addr & !1) as u32).rotate_right((addr & 1) * 8);
+            let v = (self.bus.read16(addr) as u32).rotate_right((addr & 1) * 8);
             self.bus.idle();
             self.regs.set(rd, v);
         } else {
             let v = self.regs.get(rd);
-            self.bus.write16(addr & !1, v as u16);
+            self.bus.write16(addr, v as u16);
         }
     }
 
@@ -302,7 +302,7 @@ impl Cpu {
             self.regs.set(rd, v);
         } else {
             let v = self.regs.get(rd);
-            self.bus.write32(addr & !3, v);
+            self.bus.write32(addr, v);
         }
     }
 

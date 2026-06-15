@@ -205,12 +205,22 @@ impl Bus {
                 return e.read_bit();
             }
         }
+        // The 0x0E/0x0F save region is an 8-bit bus: a wider read returns the
+        // one addressed byte duplicated into every lane.
+        if matches!(addr >> 24, 0x0E | 0x0F) {
+            let b = self.save.read(addr) as u16;
+            return b | (b << 8);
+        }
         let addr = addr & !1;
         u16::from_le_bytes([self.read8_raw(addr), self.read8_raw(addr + 1)])
     }
 
     pub fn read32(&mut self, addr: u32) -> u32 {
         self.cycles += 1;
+        if matches!(addr >> 24, 0x0E | 0x0F) {
+            let b = self.save.read(addr) as u32;
+            return b | (b << 8) | (b << 16) | (b << 24);
+        }
         let addr = addr & !3;
         u32::from_le_bytes([
             self.read8_raw(addr),
@@ -255,6 +265,12 @@ impl Bus {
                 return;
             }
         }
+        // 8-bit save bus: a 16-bit store writes a single byte, selected by the
+        // low address bit, to the (unaligned) target address.
+        if matches!(addr >> 24, 0x0E | 0x0F) {
+            self.save.write(addr, (value >> (8 * (addr & 1))) as u8);
+            return;
+        }
         let addr = addr & !1;
         let [a, b] = value.to_le_bytes();
         self.write8_raw(addr, a);
@@ -263,6 +279,12 @@ impl Bus {
 
     pub fn write32(&mut self, addr: u32, value: u32) {
         self.cycles += 1;
+        // 8-bit save bus: a 32-bit store likewise writes one byte, selected by
+        // the low two address bits.
+        if matches!(addr >> 24, 0x0E | 0x0F) {
+            self.save.write(addr, (value >> (8 * (addr & 3))) as u8);
+            return;
+        }
         let addr = addr & !3;
         let [a, b, c, d] = value.to_le_bytes();
         self.write8_raw(addr, a);
