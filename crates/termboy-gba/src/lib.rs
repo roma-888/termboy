@@ -94,4 +94,12 @@ impl Core for GbaCore {
     fn load_ram(&mut self, data: &[u8]) {
         self.cpu.bus.save.restore(data);
     }
+
+    fn drain_audio(&mut self, out: &mut Vec<(f32, f32)>) {
+        out.append(&mut self.cpu.bus.apu.samples);
+    }
+
+    fn set_audio_rate(&mut self, hz: u32) {
+        self.cpu.bus.apu.set_sample_rate(hz);
+    }
 }

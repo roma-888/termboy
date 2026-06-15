@@ -108,6 +108,26 @@ impl Bus {
                 }
             }
         }
+        self.service_fifo_dma();
+    }
+
+    /// A near-empty Direct Sound FIFO requests its refill DMA (the enabled
+    /// special-timing channel whose dest is that FIFO port).
+    fn service_fifo_dma(&mut self) {
+        for ch in 1..=2 {
+            let ctrl = self.io16(0x0BA + ch * 0xC);
+            if ctrl & 0x8000 == 0 || (ctrl >> 12) & 3 != 3 {
+                continue;
+            }
+            let which = match self.io32(0x0B0 + ch * 0xC + 4) {
+                0x0400_00A0 => 0,
+                0x0400_00A4 => 1,
+                _ => continue,
+            };
+            if self.apu.fifo_needs_dma(which) {
+                self.dma[ch].pending = true;
+            }
+        }
     }
 
     /// Frontend input, pre-encoded as KEYINPUT bits.

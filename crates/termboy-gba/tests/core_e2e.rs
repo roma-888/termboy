@@ -117,3 +117,22 @@ fn eeprom_save_round_trips_through_save_and_load_ram() {
     }
     assert_eq!(got, 0xCAFE_F00D_1234_5678);
 }
+
+#[test]
+fn psg_tone_produces_audio() {
+    let mut core = GbaCore::new(pixel_rom()).unwrap();
+    core.set_audio_rate(48_000);
+    core.debug_write8(0x0400_0084, 0x80); // SOUNDCNT_X master enable
+    core.debug_write8(0x0400_0080, 0x77); // SOUNDCNT_L vol L/R
+    core.debug_write8(0x0400_0082, 0x02); // SOUNDCNT_H: PSG 100%
+    core.debug_write8(0x0400_0081, 0xFF); // SOUNDCNT_L enables: all channels L/R
+    core.debug_write8(0x0400_0068, 0x80); // ch2 duty 50%
+    core.debug_write8(0x0400_0069, 0xF0); // ch2 full volume, no envelope
+    core.debug_write8(0x0400_006C, 0x00);
+    core.debug_write8(0x0400_006D, 0x87); // trigger, freq hi
+    let mut buf = Vec::new();
+    core.run_frame(Buttons::default());
+    core.drain_audio(&mut buf);
+    assert!(!buf.is_empty(), "no samples produced");
+    assert!(buf.iter().any(|&(l, _)| l.abs() > 0.0), "tone is silent");
+}

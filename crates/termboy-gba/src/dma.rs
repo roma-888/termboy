@@ -13,7 +13,7 @@ pub struct Dma {
     src: u32,
     dst: u32,
     count: u32,
-    pending: bool,
+    pub(crate) pending: bool,
 }
 
 impl Bus {
@@ -70,10 +70,14 @@ impl Bus {
     pub fn run_dma(&mut self, ch: usize) {
         self.dma[ch].pending = false;
         let ctrl = self.io16(CNT_H[ch]);
-        let unit: u32 = if ctrl & (1 << 10) != 0 { 4 } else { 2 };
-        let dst_adj = (ctrl >> 5) & 3;
+        // Direct Sound DMA (special timing, dest = a FIFO port): always 4
+        // words to the fixed port, regardless of the programmed unit/count.
+        let fifo_dma =
+            (ctrl >> 12) & 3 == 3 && matches!(self.dma[ch].dst, 0x0400_00A0 | 0x0400_00A4);
+        let unit: u32 = if fifo_dma || ctrl & (1 << 10) != 0 { 4 } else { 2 };
+        let dst_adj = if fifo_dma { 2 } else { (ctrl >> 5) & 3 };
         let src_adj = (ctrl >> 7) & 3;
-        let count = self.dma[ch].count;
+        let count = if fifo_dma { 4 } else { self.dma[ch].count };
         let mut src = self.dma[ch].src & !(unit - 1);
         let mut dst = self.dma[ch].dst & !(unit - 1);
         // EEPROM rides the DMA: its transfer length selects command + size.
