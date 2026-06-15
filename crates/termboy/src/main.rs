@@ -208,6 +208,12 @@ const FRAME_TIME: Duration = Duration::from_nanos(
     termboy_gb::CYCLES_PER_FRAME * 1_000_000_000 / termboy_gb::CLOCK_HZ,
 );
 
+/// During rewind, advance one snapshot every this many displayed frames.
+/// Snapshots are `rewind::INTERVAL` (6) game-frames apart, so stepping every 3
+/// displayed frames replays ~2 game-frames per displayed frame → ~2x reverse —
+/// controllable, instead of the 6x that overshot a short tap to the buffer floor.
+const REWIND_STEP: u32 = 3;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -529,6 +535,7 @@ fn run_game<C: Core>(
     let mut playback = playback::Playback::new();
     let mut rewind = rewind::Rewind::new();
     let mut rewind_key = input::HoldKey::new(input.enhanced());
+    let mut rewind_tick: u32 = 0;
     let code = 'game: loop {
         // Input: Esc quits, number keys drive save-state slots, the rest goes
         // to the button tracker.
@@ -600,20 +607,23 @@ fn run_game<C: Core>(
 
         out.clear();
         if rewind_key.is_held(now) {
-            // Rewind: step back through snapshots, newest first — one per frame,
-            // so it reverses at ~snapshot-interval speed. Audio is silenced
-            // (reverse audio is just noise). When the ring runs dry the screen
-            // simply freezes on the oldest available state.
-            if let Some(snap) = rewind.pop() {
+            // Rewind: step back through snapshots, newest first, but only every
+            // REWIND_STEP displayed frames so it reverses at ~2x (not 6x). Audio
+            // is silenced (reverse audio is just noise). On non-step frames we
+            // skip the render, so the screen holds; when the ring runs dry it
+            // freezes on the oldest available state.
+            if rewind_tick.is_multiple_of(REWIND_STEP) && let Some(snap) = rewind.pop() {
                 let _ = core.load_state(&snap);
                 let fb = core.run_frame(Buttons::default());
                 screen.render(fb, &mut out);
                 core.drain_audio(&mut audio_buf);
                 audio_buf.clear();
             }
+            rewind_tick = rewind_tick.wrapping_add(1);
             screen.set_overlay("rewind");
             overlay_until = now + Duration::from_millis(400);
         } else {
+            rewind_tick = 0; // fresh hold steps immediately
             let fb = core.run_frame(input.buttons(Instant::now()));
             screen.render(fb, &mut out);
             core.drain_audio(&mut audio_buf);
