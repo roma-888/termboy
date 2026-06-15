@@ -5,3 +5,12 @@ members = ["crates/termboy-core", "crates/termboy-gb", "crates/termboy-gba", "cr
 [workspace.package]
 edition = "2024"
 license = "MIT"
+
+# Release builds are for playing: optimize hard. Emulators are dominated by many
+# tiny hot functions across module/crate boundaries (bus accesses inlined into
+# CPU steps, the per-access timing model, PPU inner loops), so cross-unit
+# inlining matters — fat LTO + a single codegen unit. `panic = "unwind"` stays
+# (the frontend uses catch_unwind to keep a crashing game from killing the app).
+[profile.release]
+lto = "fat"
+codegen-units = 1
