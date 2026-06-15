@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "termboy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cpal",
  "crossterm",
@@ -742,18 +742,18 @@ dependencies = [
 
 [[package]]
 name = "termboy-core"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "termboy-gb"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "termboy-core",
 ]
 
 [[package]]
 name = "termboy-gba"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "termboy-core",
 ]
