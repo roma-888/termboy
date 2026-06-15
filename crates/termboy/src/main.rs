@@ -126,10 +126,29 @@ mod tests {
         assert!(!path.with_extension("sav.tmp").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn frame_periods_agree_across_cores() {
+        // Each core's frame period in ns, computed identically from its own
+        // documented cycles-per-frame and clock. The GBA has no double-speed
+        // mode, so both must land on exactly the same period.
+        let gb_ns = termboy_gb::CYCLES_PER_FRAME * 1_000_000_000 / termboy_gb::CLOCK_HZ;
+        let gba_ns = termboy_gba::CYCLES_PER_FRAME * 1_000_000_000 / termboy_gba::CLOCK_HZ;
+        assert_eq!(gb_ns, gba_ns, "GB and GBA frame periods must match");
+        assert_eq!(FRAME_TIME, Duration::from_nanos(gb_ns), "FRAME_TIME must be the shared period");
+
+        let hz = 1e9 / gb_ns as f64;
+        assert!((hz - 59.7275).abs() < 0.001, "frame rate {hz} Hz, expected ~59.7275");
+    }
 }
 
-/// 4_194_304 Hz / 70_224 cycles ≈ 59.73 fps.
-const FRAME_TIME: Duration = Duration::from_nanos(70_224 * 1_000_000_000 / 4_194_304);
+/// The shared 59.7275 Hz frame period. Both cores emit one frame per this span
+/// of wall-clock time — GB: 70_224 cycles @ 4.194304 MHz; GBA: 280_896 cycles
+/// @ 16.777216 MHz — so the frontend paces every core identically and the GBA
+/// needs no double-speed branch. `frame_periods_agree_across_cores` guards it.
+const FRAME_TIME: Duration = Duration::from_nanos(
+    termboy_gb::CYCLES_PER_FRAME * 1_000_000_000 / termboy_gb::CLOCK_HZ,
+);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

@@ -39,6 +39,10 @@ fn unix_now() -> u64 {
 /// T-cycles per video frame (154 scanlines x 456 cycles, ~59.73 Hz).
 pub const CYCLES_PER_FRAME: u64 = 70224;
 
+/// CPU/master clock in Hz. `CYCLES_PER_FRAME / CLOCK_HZ` = 59.7275 Hz, the
+/// frame period the frontend paces to (shared with every other core).
+pub const CLOCK_HZ: u64 = 4_194_304;
+
 pub struct GameBoy {
     cpu: Cpu,
     frame: FrameBuffer,

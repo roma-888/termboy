@@ -21,6 +21,10 @@ use crate::cpu::Cpu;
 /// 1232 cycles/line * 228 lines = 59.7275 Hz — the same frame rate as the GB.
 pub const CYCLES_PER_FRAME: u64 = 280_896;
 
+/// Master clock in Hz. `CYCLES_PER_FRAME / CLOCK_HZ` = 59.7275 Hz — the same
+/// frame period as the GB; the GBA has no double-speed mode.
+pub const CLOCK_HZ: u64 = 16_777_216;
+
 pub struct GbaCore {
     cpu: Cpu,
     frame: FrameBuffer,
