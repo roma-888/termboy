@@ -2,6 +2,8 @@
 //! waitstates land in G7). Bus::catch_up walks scanline-granular timing
 //! events to drive rendering and IRQ sources between CPU steps.
 
+use crate::timing::{self, Width};
+
 pub(crate) const CYCLES_PER_LINE: u64 = 1232;
 pub(crate) const LINES: u64 = 228;
 const VBLANK_START: u64 = 160;
@@ -21,8 +23,12 @@ pub struct Bus {
     /// Frontend input, pre-encoded as KEYINPUT bits (active low).
     keyinput: u16,
     pub ppu: crate::ppu::Ppu,
-    /// Total elapsed (coarse) cycles since power-on.
+    /// Total elapsed cycles since power-on.
     pub cycles: u64,
+    /// Address a sequential access would target next (last addr + width).
+    seq_next: u32,
+    /// Set on a pipeline flush: forces the next access non-sequential.
+    nonseq: bool,
     /// Number of timing events processed (2 per line: start, hblank).
     events_done: u64,
     pub(crate) dma: [crate::dma::Dma; 4],
@@ -51,6 +57,8 @@ impl Bus {
             keyinput: 0x03FF,
             ppu: crate::ppu::Ppu::new(),
             cycles: 0,
+            seq_next: 0,
+            nonseq: true,
             events_done: 0,
             dma: [crate::dma::Dma::default(); 4],
             timers: [crate::timers::Timer::default(); 4],
@@ -160,6 +168,21 @@ impl Bus {
         self.cycles += 1;
     }
 
+    /// Charge one memory access (region waitstates, width, sequential or not)
+    /// and advance the sequential-access tracker.
+    fn tick_access(&mut self, addr: u32, width: Width) {
+        let seq = addr == self.seq_next && !self.nonseq;
+        self.nonseq = false;
+        self.cycles += timing::access_cycles(addr >> 24, self.io16(0x204), width, seq) as u64;
+        self.seq_next = addr.wrapping_add(width.bytes());
+    }
+
+    /// Force the next access to be treated as non-sequential — called by the
+    /// CPU on a pipeline flush (branch, exception, mode change).
+    pub fn mark_nonseq(&mut self) {
+        self.nonseq = true;
+    }
+
     fn line(&self) -> u64 {
         (self.cycles / CYCLES_PER_LINE) % LINES
     }
@@ -172,7 +195,7 @@ impl Bus {
     }
 
     pub fn read8(&mut self, addr: u32) -> u8 {
-        self.cycles += 1;
+        self.tick_access(addr, Width::Bits8);
         self.read8_raw(addr)
     }
 
@@ -199,7 +222,7 @@ impl Bus {
     }
 
     pub fn read16(&mut self, addr: u32) -> u16 {
-        self.cycles += 1;
+        self.tick_access(addr, Width::Bits16);
         if addr >> 24 == 0x0D {
             if let Some(e) = self.save.eeprom() {
                 return e.read_bit();
@@ -216,7 +239,7 @@ impl Bus {
     }
 
     pub fn read32(&mut self, addr: u32) -> u32 {
-        self.cycles += 1;
+        self.tick_access(addr, Width::Bits32);
         if matches!(addr >> 24, 0x0E | 0x0F) {
             let b = self.save.read(addr) as u32;
             return b | (b << 8) | (b << 16) | (b << 24);
@@ -231,7 +254,7 @@ impl Bus {
     }
 
     pub fn write8(&mut self, addr: u32, value: u8) {
-        self.cycles += 1;
+        self.tick_access(addr, Width::Bits8);
         match addr >> 24 {
             // 16-bit video memories: byte stores write both halves...
             0x05 | 0x06 => {
@@ -258,7 +281,7 @@ impl Bus {
     }
 
     pub fn write16(&mut self, addr: u32, value: u16) {
-        self.cycles += 1;
+        self.tick_access(addr, Width::Bits16);
         if addr >> 24 == 0x0D {
             if let Some(e) = self.save.eeprom() {
                 e.write_bit(value);
@@ -278,7 +301,7 @@ impl Bus {
     }
 
     pub fn write32(&mut self, addr: u32, value: u32) {
-        self.cycles += 1;
+        self.tick_access(addr, Width::Bits32);
         // 8-bit save bus: a 32-bit store likewise writes one byte, selected by
         // the low two address bits.
         if matches!(addr >> 24, 0x0E | 0x0F) {
@@ -466,12 +489,12 @@ mod tests {
     }
 
     #[test]
-    fn every_access_costs_one_cycle() {
+    fn accesses_cost_their_region_waitstates() {
         let mut b = bus();
-        b.read32(0x0200_0000);
-        b.write8(0x0300_0000, 1);
-        b.idle();
-        assert_eq!(b.cycles, 3);
+        b.read32(0x0200_0000); // EWRAM, 16-bit bus, 32-bit access = 6
+        b.write8(0x0300_0000, 1); // IWRAM, 32-bit bus = 1
+        b.idle(); // internal cycle = 1
+        assert_eq!(b.cycles, 8);
     }
 
     #[test]
