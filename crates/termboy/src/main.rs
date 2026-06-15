@@ -217,11 +217,12 @@ const FRAME_TIME: Duration = Duration::from_nanos(
 /// controllable, instead of the 6x that overshot a short tap to the buffer floor.
 const REWIND_STEP: u32 = 3;
 
-/// Most emulated frames to run between redraws before giving up on the backlog.
-/// Fast-forward emulates several frames per redraw (4x ≈ 8–10 here); this caps
-/// the burst so a long stall (laptop sleep) drops its backlog instead of
-/// avalanching, while staying high enough not to throttle 4x on slower machines.
-const MAX_CATCHUP: u32 = 32;
+/// Most emulated frames to run in one loop pass before pacing/dropping the
+/// backlog. Kept small so a slow scene (or an unreachable target speed) can't
+/// accumulate frames and replay them in one jerky burst between redraws — the
+/// render gate, not a big batch, is what amortizes redraw cost now. Also bounds
+/// catch-up after a stall (e.g. the laptop slept) so it never avalanches.
+const MAX_CATCHUP: u32 = 4;
 
 /// Which renderer to use. `Auto` picks kitty graphics on terminals that support
 /// it (detected from the environment), half-blocks elsewhere.
@@ -305,6 +306,136 @@ impl Display {
         if let Display::Kitty(_) = self {
             out.push_str("\x1b_Ga=d,d=A\x1b\\");
         }
+    }
+}
+
+/// Work sent from the emulation thread to the render thread. Frames carry the
+/// current overlay so the worker needs no separate overlay channel; only the
+/// newest queued frame is drawn (older ones are dropped), so a slow renderer
+/// never backs up or stalls emulation.
+enum RenderMsg {
+    Frame { fb: termboy_core::FrameBuffer, overlay: Option<String> },
+    Viewport { cols: usize, rows: usize, cell_px: Option<(usize, usize)> },
+    Invalidate,
+    /// Bytes to write verbatim (resize clear, too-small notice).
+    Raw(String),
+}
+
+/// Handle to the render worker. The worker owns the `Display` and is the only
+/// thread that writes to stdout, so emulation never spends time rendering or
+/// blocking on terminal I/O. Dropping the handle closes the channel, which makes
+/// the worker tear down its image and exit — this runs on normal return *and*
+/// during a panic unwind, so the terminal is always left clean.
+struct Renderer {
+    tx: Option<std::sync::mpsc::Sender<RenderMsg>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Renderer {
+    fn spawn(display: Display) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<RenderMsg>();
+        let handle = std::thread::spawn(move || render_loop(display, rx));
+        Self { tx: Some(tx), handle: Some(handle) }
+    }
+
+    fn send(&self, msg: RenderMsg) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(msg); // worker gone -> nothing to draw to; ignore
+        }
+    }
+
+    fn frame(&self, fb: termboy_core::FrameBuffer, overlay: Option<String>) {
+        self.send(RenderMsg::Frame { fb, overlay });
+    }
+    fn viewport(&self, cols: usize, rows: usize, cell_px: Option<(usize, usize)>) {
+        self.send(RenderMsg::Viewport { cols, rows, cell_px });
+    }
+    fn invalidate(&self) {
+        self.send(RenderMsg::Invalidate);
+    }
+    fn raw(&self, s: String) {
+        self.send(RenderMsg::Raw(s));
+    }
+}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        self.tx.take(); // close the channel so the worker finishes and exits
+        if let Some(h) = self.handle.take() {
+            let _ = h.join(); // wait for its teardown before the terminal is reused
+        }
+    }
+}
+
+/// Render worker loop: drains the channel each wake-up, applying control
+/// messages in order but keeping only the most recent frame, then draws that
+/// one. A redraw never blocks emulation (a different thread) and is capped near
+/// the display rate so fast-forward can't flood the terminal.
+fn render_loop(mut display: Display, rx: std::sync::mpsc::Receiver<RenderMsg>) {
+    use std::io::Write as _;
+    use std::sync::mpsc::TryRecvError;
+    let write = |s: &str| {
+        let mut so = std::io::stdout();
+        let _ = so.write_all(s.as_bytes());
+        let _ = so.flush();
+    };
+    let mut last_overlay: Option<String> = None;
+    let mut out = String::new();
+    let mut last_draw = Instant::now();
+    loop {
+        // Block for the next message, then drain whatever else is queued so we
+        // render only the freshest frame (control messages still apply in order).
+        let Ok(mut msg) = rx.recv() else { break }; // handle dropped -> quit
+        let mut latest: Option<(termboy_core::FrameBuffer, Option<String>)> = None;
+        let mut disconnected = false;
+        loop {
+            match msg {
+                RenderMsg::Frame { fb, overlay } => latest = Some((fb, overlay)),
+                RenderMsg::Viewport { cols, rows, cell_px } => {
+                    display.set_viewport(cols, rows, cell_px)
+                }
+                RenderMsg::Invalidate => display.invalidate(),
+                RenderMsg::Raw(s) => write(&s),
+            }
+            match rx.try_recv() {
+                Ok(m) => msg = m,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        if let Some((fb, overlay)) = latest {
+            // Cap the redraw rate so fast-forward doesn't stream frames faster
+            // than the terminal can usefully show them.
+            let since = last_draw.elapsed();
+            if since < FRAME_TIME {
+                std::thread::sleep(FRAME_TIME - since);
+            }
+            if overlay != last_overlay {
+                match &overlay {
+                    Some(m) => display.set_overlay(m),
+                    None => display.clear_overlay(),
+                }
+                last_overlay = overlay;
+            }
+            out.clear();
+            display.render(&fb, &mut out);
+            if !out.is_empty() {
+                write(&out);
+            }
+            last_draw = Instant::now();
+        }
+        if disconnected {
+            break;
+        }
+    }
+    // Free any transmitted image so it doesn't linger over the picker / on exit.
+    out.clear();
+    display.teardown(&mut out);
+    if !out.is_empty() {
+        write(&out);
     }
 }
 
@@ -476,12 +607,12 @@ fn run_menu(
             match load_gba(&path) {
                 Ok(core) => {
                     let mut input = input::Input::new(guard.enhanced, keymap.clone());
-                    let mut screen = Display::new(use_kitty, 240, 160);
+                    let screen = Display::new(use_kitty, 240, 160);
                     print!("\x1b[0m\x1b[2J");
                     let sav = sav_path(&path);
                     let audio = &audio; // keep the move closure from consuming it
                     catch_game_panic(move || {
-                        run_game(core, exact, &sav, &mut input, &mut screen, audio);
+                        run_game(core, exact, &sav, &mut input, screen, audio);
                         // Esc in-game returns here: back to the picker.
                     })
                 }
@@ -491,11 +622,11 @@ fn run_menu(
             match load_game(&path, palette) {
                 Ok((gb, sav)) => {
                     let mut input = input::Input::new(guard.enhanced, keymap.clone());
-                    let mut screen = Display::new(use_kitty, 160, 144);
+                    let screen = Display::new(use_kitty, 160, 144);
                     print!("\x1b[0m\x1b[2J");
                     let audio = &audio;
                     catch_game_panic(move || {
-                        run_game(gb, exact, &sav, &mut input, &mut screen, audio);
+                        run_game(gb, exact, &sav, &mut input, screen, audio);
                     })
                 }
                 Err(msg) => Some(msg),
@@ -641,33 +772,41 @@ fn run_terminal<C: Core>(
         }
     };
     let mut input = input::Input::new(guard.enhanced, keymap);
-    let mut screen = Display::new(use_kitty, width, height);
+    let screen = Display::new(use_kitty, width, height);
     let audio = audio::Audio::new();
-    run_game(core, exact, sav, &mut input, &mut screen, &audio)
+    run_game(core, exact, sav, &mut input, screen, &audio)
 }
 
 /// Run one game until Esc. Assumes raw mode + alternate screen are active.
+/// Emulation runs on this thread; rendering and *all* terminal writes happen on
+/// a worker (`Renderer`), so a redraw never steals CPU from the core or blocks
+/// it on terminal I/O. We hand the worker the latest frame each pass and it
+/// draws the newest, dropping the rest — emulation is never gated by render
+/// cost, so fast-forward runs as fast as the core itself allows.
 fn run_game<C: Core>(
     mut core: C,
     exact: bool,
     sav: &Path,
     input: &mut input::Input,
-    screen: &mut Display,
+    screen: Display,
     audio: &audio::Audio,
 ) -> ExitCode {
     core.set_audio_rate(audio.sample_rate);
     let mut audio_buf: Vec<(f32, f32)> = Vec::new();
     let (need_cols, need_rows) = screen.required_size();
+    let renderer = Renderer::spawn(screen);
+    renderer.invalidate();
     let mut last_size = (0u16, 0u16);
-    screen.invalidate();
 
-    let mut out = String::new();
-    // Wall-clock time the next emulated frame is due. Emulation is paced to this
-    // (so the selected speed is exact); the renderer draws only the latest frame
-    // and is allowed to skip redraws when it can't keep up — see the loop below.
+    // Wall-clock time the next emulated frame is due; emulation is paced to this
+    // (so the selected speed is exact when the core can reach it).
     let mut next_emu = Instant::now();
     let mut last_saved: Option<Vec<u8>> = core.save_ram();
     let mut frames: u32 = 0;
+    // Transient overlay text (save/speed badge, or "rewind"), handed to the
+    // worker with each frame until it expires — the worker owns the Display, so
+    // the overlay travels with the frame rather than being set on it directly.
+    let mut overlay: Option<String> = None;
     let mut overlay_until = Instant::now();
     let mut playback = playback::Playback::new();
     let mut rewind = rewind::Rewind::new();
@@ -689,7 +828,7 @@ fn run_game<C: Core>(
                         break 'game ExitCode::SUCCESS;
                     }
                     if let Some(msg) = handle_slot_key(&k, &mut core, sav) {
-                        screen.set_overlay(&msg);
+                        overlay = Some(msg);
                         overlay_until = Instant::now() + Duration::from_millis(1500);
                     } else if let Some(msg) = handle_playback_key(&k, &mut playback) {
                         // A speed change moves the wall-clock frame rate, so
@@ -698,19 +837,19 @@ fn run_game<C: Core>(
                         // underruns into silence-laced crackle. (Mute leaves the
                         // multiplier unchanged, so this is a no-op for it.)
                         core.set_audio_rate(playback.audio_rate(audio.sample_rate));
-                        screen.set_overlay(&msg);
+                        overlay = Some(msg);
                         overlay_until = Instant::now() + Duration::from_millis(1500);
                     } else {
                         input.handle(&k, now);
                     }
                 }
                 Ok(Event::Key(k)) => input.handle(&k, now),
-                Ok(Event::Resize(..)) => screen.invalidate(),
+                Ok(Event::Resize(..)) => renderer.invalidate(),
                 _ => {}
             }
         }
         if overlay_until <= now {
-            screen.clear_overlay();
+            overlay = None;
         }
 
         let (cols, rows) = terminal::size().unwrap_or((0, 0));
@@ -720,15 +859,11 @@ fn run_game<C: Core>(
             cols < 16 || rows < 8 // below this nothing recognizable fits
         };
         if too_small {
-            out.clear();
-            out.push_str("\x1b[0m\x1b[2J\x1b[H");
             let (nc, nr) = if exact { (need_cols, need_rows) } else { (16, 8) };
-            out.push_str(&format!(
-                "termboy needs a {nc}x{nr} terminal (yours: {cols}x{rows}). Resize, or press Esc to quit."
+            renderer.raw(format!(
+                "\x1b[0m\x1b[2J\x1b[Htermboy needs a {nc}x{nr} terminal (yours: {cols}x{rows}). Resize, or press Esc to quit."
             ));
-            print!("{out}");
-            std::io::stdout().flush().ok();
-            screen.invalidate();
+            renderer.invalidate();
             last_size = (0, 0);
             std::thread::sleep(Duration::from_millis(100));
             next_emu = Instant::now();
@@ -736,47 +871,41 @@ fn run_game<C: Core>(
         }
         if (cols, rows) != last_size {
             last_size = (cols, rows);
-            screen.set_viewport(cols as usize, rows as usize, cell_pixels());
-            screen.invalidate();
-            print!("\x1b[0m\x1b[2J"); // clear leftovers outside the (re)centered image
-            std::io::stdout().flush().ok();
+            renderer.viewport(cols as usize, rows as usize, cell_pixels());
+            renderer.invalidate();
+            renderer.raw("\x1b[0m\x1b[2J".to_string()); // clear leftovers outside the (re)centered image
         }
 
-        out.clear();
         let frame_dt = playback.frame_dt(FRAME_TIME);
         if rewind_key.is_held(now) {
             // Rewind: step back through snapshots, newest first, but only every
             // REWIND_STEP displayed frames so it reverses at ~2x (not 6x). Audio
             // is silenced (reverse audio is just noise). On non-step frames we
-            // skip the render, so the screen holds; when the ring runs dry it
-            // freezes on the oldest available state.
+            // hand the worker nothing, so the screen holds; when the ring runs
+            // dry it freezes on the oldest available state.
             if rewind_tick.is_multiple_of(REWIND_STEP) && let Some(snap) = rewind.pop() {
                 let _ = core.load_state(&snap);
                 let fb = core.run_frame(Buttons::default());
-                screen.render(fb, &mut out);
+                renderer.frame(fb.clone(), Some("rewind".to_string()));
                 core.drain_audio(&mut audio_buf);
                 audio_buf.clear();
             }
             rewind_tick = rewind_tick.wrapping_add(1);
-            screen.set_overlay("rewind");
             overlay_until = now + Duration::from_millis(400);
             next_emu = now + FRAME_TIME; // rewind isn't speed-scaled: pace at 60 Hz
         } else {
             rewind_tick = 0; // fresh hold steps immediately
-            // Emulate every frame whose due-time has arrived and draw only the
-            // last. At 4x the core needs ~240 fps but the renderer (the kitty
-            // graphics path costs more than a frame's wall-budget) can't redraw
-            // that fast — so it skips redraws, dropping the *display* rate while
-            // emulation still advances at the exact selected speed. This keeps
-            // image quality intact (full-resolution frames, just fewer of them),
-            // unlike trading pixels for speed. Audio drains every emulated frame,
-            // so production stays matched to the device at every speed.
+            // Catch emulation up to the wall clock — a few frames at most, so a
+            // slow scene can't build a backlog and replay it in a jerky burst. We
+            // hand the worker only the last frame produced; it draws the newest
+            // and drops the rest, so emulation is never gated by render cost.
+            // Audio drains every emulated frame, so production stays matched.
             let due = playback::frames_due(now.saturating_duration_since(next_emu), frame_dt, MAX_CATCHUP);
             let buttons = input.buttons(now);
             for i in 0..due {
                 let fb = core.run_frame(buttons);
                 if i + 1 == due {
-                    screen.render(fb, &mut out);
+                    renderer.frame(fb.clone(), overlay.clone());
                 }
                 core.drain_audio(&mut audio_buf);
                 if playback.is_muted() {
@@ -790,20 +919,15 @@ fn run_game<C: Core>(
             }
             next_emu += frame_dt * due;
         }
-        if !out.is_empty() {
-            print!("{out}");
-            std::io::stdout().flush().ok();
-        }
 
         frames += 1;
         if frames % 300 == 0 {
             flush_save(&core, sav, &mut last_saved); // every ~5 seconds
         }
 
-        // Sleep until the next frame is due. If we've fallen more than a full
-        // catch-up window behind (the app was suspended, or the renderer simply
-        // can't sustain this speed), drop the backlog instead of replaying it in
-        // a burst — the same "don't catch up all at once" guard as before.
+        // Pace to the next due frame. If we've fallen more than a full catch-up
+        // window behind (the app was suspended, or the core can't reach this
+        // speed), drop the backlog instead of replaying it in a burst.
         let now = Instant::now();
         if now.saturating_duration_since(next_emu) > frame_dt * MAX_CATCHUP {
             next_emu = now;
@@ -812,12 +936,6 @@ fn run_game<C: Core>(
         }
     };
     flush_save(&core, sav, &mut last_saved);
-    // Free any graphics image so it doesn't linger over the picker / after exit.
-    let mut tail = String::new();
-    screen.teardown(&mut tail);
-    if !tail.is_empty() {
-        print!("{tail}");
-        std::io::stdout().flush().ok();
-    }
-    code
+    code // `renderer` drops here: it closes the channel, the worker tears down
+         // its image, and we join — so the terminal is clean before we return.
 }

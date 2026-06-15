@@ -12,6 +12,7 @@ pub const STATE_VERSION: u16 = 1;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
+#[derive(Clone)]
 pub struct FrameBuffer {
     pub width: usize,
     pub height: usize,
