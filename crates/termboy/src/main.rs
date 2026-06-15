@@ -14,8 +14,8 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::{cursor, execute, terminal};
 use termboy_core::{Buttons, Core, Rgb};
@@ -71,6 +71,43 @@ fn parse_palette(name: &str) -> Option<[Rgb; 4]> {
 
 fn sav_path(rom_path: &str) -> PathBuf {
     Path::new(rom_path).with_extension("sav")
+}
+
+/// Save-state slot file: `<rom>.ss0` … `<rom>.ss9`, derived from the `.sav` path.
+fn ss_path(sav: &Path, slot: u8) -> PathBuf {
+    sav.with_extension(format!("ss{slot}"))
+}
+
+/// If `k` is a save-state slot key, perform the action and return the overlay
+/// message. Bare digit `N` saves to slot N; the shifted digit (kitty terminals
+/// report digit+SHIFT, legacy ones report the symbol) loads it.
+fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<String> {
+    let KeyCode::Char(c) = k.code else { return None };
+    let digit = |c: char| c.to_digit(10).map(|d| d as u8);
+    let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+    // Bare digit -> save.
+    if c.is_ascii_digit() && !shift {
+        let slot = digit(c).unwrap();
+        return Some(match write_save(&ss_path(sav, slot), &core.save_state()) {
+            Ok(()) => format!("saved slot {slot}"),
+            Err(_) => format!("save slot {slot} failed"),
+        });
+    }
+    // Shifted digit (kitty) or its shifted symbol (legacy) -> load.
+    const SYMBOLS: [char; 10] = [')', '!', '@', '#', '$', '%', '^', '&', '*', '('];
+    let load_slot = if c.is_ascii_digit() && shift {
+        digit(c)
+    } else {
+        SYMBOLS.iter().position(|&s| s == c).map(|i| i as u8)
+    };
+    let slot = load_slot?;
+    Some(match std::fs::read(ss_path(sav, slot)) {
+        Ok(d) => match core.load_state(&d) {
+            Ok(()) => format!("loaded slot {slot}"),
+            Err(e) => format!("load failed: {e}"),
+        },
+        Err(_) => format!("slot {slot} empty"),
+    })
 }
 
 /// Atomic write: a crash mid-write must never corrupt an existing save.
@@ -467,18 +504,31 @@ fn run_game<C: Core>(
     let mut next_frame = Instant::now();
     let mut last_saved: Option<Vec<u8>> = core.save_ram();
     let mut frames: u32 = 0;
+    let mut overlay_until = Instant::now();
     let code = 'game: loop {
-        // Input: Esc quits, everything else goes to the tracker.
+        // Input: Esc quits, number keys drive save-state slots, the rest goes
+        // to the button tracker.
         let now = Instant::now();
         while event::poll(Duration::ZERO).unwrap_or(false) {
             match event::read() {
-                Ok(Event::Key(k)) if k.code == KeyCode::Esc && k.kind == KeyEventKind::Press => {
-                    break 'game ExitCode::SUCCESS;
+                Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => {
+                    if k.code == KeyCode::Esc {
+                        break 'game ExitCode::SUCCESS;
+                    }
+                    if let Some(msg) = handle_slot_key(&k, &mut core, sav) {
+                        screen.set_overlay(&msg);
+                        overlay_until = Instant::now() + Duration::from_millis(1500);
+                    } else {
+                        input.handle(&k, now);
+                    }
                 }
                 Ok(Event::Key(k)) => input.handle(&k, now),
                 Ok(Event::Resize(..)) => screen.invalidate(),
                 _ => {}
             }
+        }
+        if overlay_until <= now {
+            screen.clear_overlay();
         }
 
         let (cols, rows) = terminal::size().unwrap_or((0, 0));

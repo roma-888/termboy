@@ -12,13 +12,37 @@ pub struct Screen {
     off_r: usize,
     /// (top, bottom) color of every cell as last drawn; None = never drawn.
     prev: Vec<Option<(Rgb, Rgb)>>,
+    /// Transient status text drawn over the top-left of the frame (save states).
+    overlay: Option<String>,
 }
 
 impl Screen {
     pub fn new(width: usize, height: usize) -> Self {
         let cols = width;
         let rows = height.div_ceil(2);
-        Self { src_w: width, src_h: height, cols, rows, off_c: 0, off_r: 0, prev: vec![None; cols * rows] }
+        Self {
+            src_w: width,
+            src_h: height,
+            cols,
+            rows,
+            off_c: 0,
+            off_r: 0,
+            prev: vec![None; cols * rows],
+            overlay: None,
+        }
+    }
+
+    /// Show transient status text over the frame (e.g. "saved slot 3").
+    pub fn set_overlay(&mut self, msg: &str) {
+        self.overlay = Some(msg.to_string());
+    }
+
+    /// Remove the overlay and force a full repaint so the covered cells redraw.
+    pub fn clear_overlay(&mut self) {
+        if self.overlay.is_some() {
+            self.overlay = None;
+            self.invalidate();
+        }
     }
 
     /// Terminal size needed for pixel-perfect output: (cols, rows).
@@ -125,6 +149,12 @@ impl Screen {
                 out.push('▀');
             }
         }
+        // Draw the overlay last so it sits on top of the frame. It writes at a
+        // fixed position without touching `prev`; clear_overlay() invalidates
+        // to repaint the covered cells once it expires.
+        if let Some(msg) = &self.overlay {
+            write!(out, "\x1b[1;1H\x1b[97;44m {msg} \x1b[0m").unwrap();
+        }
     }
 }
 
@@ -175,6 +205,15 @@ mod tests {
         );
         assert_eq!(out.matches('▀').count(), 1);
         assert!(out.contains("\x1b[1;1H"));
+    }
+
+    #[test]
+    fn overlay_draws_text_over_the_frame() {
+        let mut s = Screen::new(8, 4);
+        let mut out = String::new();
+        s.set_overlay("hi");
+        s.render(&FrameBuffer::new(8, 4), &mut out);
+        assert!(out.contains("hi"));
     }
 
     #[test]

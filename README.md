@@ -50,7 +50,14 @@ throughput -- <rom.gba>`. That completes the GBA roadmap — cycle-exact timing
 | Tab | Select |
 | A | L (GBA) |
 | S | R (GBA) |
+| `1`–`0` | Save state to slot 1–10 |
+| Shift + `1`–`0` | Load state from that slot |
 | Esc | Quit |
+
+Save states capture the full machine and persist to `<rom>.ss0`…`<rom>.ss9`, so
+they survive quitting. A brief overlay confirms each save/load. (The load
+shortcut sends the shifted number — `!@#…` on a US keyboard, or number+Shift in
+kitty-protocol terminals; a state saved in one game won't load into another.)
 
 Input feels best in a terminal supporting the kitty keyboard protocol
 (Ghostty, kitty, WezTerm, recent iTerm2/Alacritty) — real key-release events.
