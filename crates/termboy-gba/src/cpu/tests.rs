@@ -1008,3 +1008,16 @@ fn vblank_intr_wait_sleeps_until_the_isr_records_vblank() {
     assert_eq!(cpu.bus.read16(0x0300_7FF8) & 1, 0); // flag consumed
     assert!(!cpu.bus.halted);
 }
+
+#[test]
+fn flush_marks_next_fetch_nonsequential() {
+    // ROM (16-bit bus, default WAITCNT): a 32-bit fetch costs N=8 or S=6.
+    // After a sequential prefetch, flush() must force the next fetch
+    // non-sequential even though its address is contiguous, so flush's two
+    // fetches cost N(8)+S(6)=14, not S(6)+S(6)=12.
+    let mut cpu = cpu_with(&[0xE1A0_0000, 0xE1A0_0000, 0xE1A0_0000]); // NOPs
+    cpu.step(); // a sequential prefetch happens here
+    let before = cpu.bus.cycles;
+    cpu.flush();
+    assert_eq!(cpu.bus.cycles - before, 14);
+}

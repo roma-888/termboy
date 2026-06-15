@@ -50,6 +50,9 @@ impl Cpu {
     /// Refill the pipeline after any write to r15. Also masks alignment,
     /// so callers can pass BX-style targets straight through.
     pub(crate) fn flush(&mut self) {
+        // A pipeline refill starts a fresh instruction stream: the first fetch
+        // is non-sequential, the second (contiguous) is sequential.
+        self.bus.mark_nonseq();
         if self.regs.cpsr.thumb() {
             let pc = self.regs.get(15) & !1;
             self.pipeline[0] = self.bus.read16(pc) as u32;
