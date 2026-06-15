@@ -2,7 +2,9 @@
 //! terminals that support it (Ghostty, kitty, WezTerm). Pure encoders here —
 //! no terminal I/O — so the wire format is unit-testable. Each frame reuses a
 //! fixed image id with `a=T` so the terminal replaces the previous frame in
-//! place; raw RGB (`f=24`) keeps it dependency-free.
+//! place. Frames are nearest-neighbor upscaled to the on-screen pixel size so
+//! the terminal does no blurry scaling (crisp retro pixels), then sent as
+//! zlib-compressed RGB (`f=24,o=z`) to keep that larger payload affordable.
 
 use termboy_core::{FrameBuffer, Rgb};
 
@@ -32,44 +34,70 @@ fn base64_encode(data: &[u8], out: &mut String) {
     }
 }
 
-/// Append the kitty APC command(s) that transmit-and-display `fb` as image
-/// `id`, sized to `cols`x`rows` terminal cells (the terminal scales the native
-/// frame into that rectangle). Chunked per the protocol's 4096-byte limit.
-pub fn encode_frame(fb: &FrameBuffer, id: u32, cols: u16, rows: u16, out: &mut String) {
-    use std::fmt::Write;
-    let mut rgb = Vec::with_capacity(fb.pixels.len() * 3);
-    for p in &fb.pixels {
-        rgb.extend_from_slice(&[p.0, p.1, p.2]);
+/// Nearest-neighbor upscale `fb` to `dst_w`x`dst_h`, returning packed RGB. Done
+/// in-process so the terminal displays our exact pixels with no blurry linear
+/// upscaling; an identity copy when the destination equals the source size.
+fn nearest_upscale(fb: &FrameBuffer, dst_w: usize, dst_h: usize) -> Vec<u8> {
+    let mut out = vec![0u8; dst_w * dst_h * 3];
+    for dy in 0..dst_h {
+        let row = (dy * fb.height / dst_h) * fb.width;
+        for dx in 0..dst_w {
+            let p = fb.pixels[row + dx * fb.width / dst_w];
+            let o = (dy * dst_w + dx) * 3;
+            out[o] = p.0;
+            out[o + 1] = p.1;
+            out[o + 2] = p.2;
+        }
     }
-    let mut b64 = String::with_capacity(rgb.len().div_ceil(3) * 4);
-    base64_encode(&rgb, &mut b64);
+    out
+}
 
-    let bytes = b64.as_bytes();
+/// Emit `payload` (base64) as one or more APC chunks: the first carries
+/// `control` plus data, the rest just `m=`. Splits at the protocol's 4096-byte
+/// limit, marking every chunk but the last with `m=1`.
+fn push_chunked(control: &str, payload: &str, out: &mut String) {
+    use std::fmt::Write;
     let mut i = 0;
     let mut first = true;
-    // Always emit at least one command (an empty frame would still announce it).
     loop {
-        let end = (i + CHUNK).min(bytes.len());
-        let more = end < bytes.len();
+        let end = (i + CHUNK).min(payload.len());
+        let more = end < payload.len();
         let m = u8::from(more);
         if first {
-            write!(
-                out,
-                "\x1b_Ga=T,f=24,s={},v={},i={id},p=1,c={cols},r={rows},C=1,q=2,m={m};",
-                fb.width, fb.height
-            )
-            .unwrap();
+            write!(out, "\x1b_G{control},m={m};").unwrap();
             first = false;
         } else {
             write!(out, "\x1b_Gm={m};").unwrap();
         }
-        out.push_str(&b64[i..end]);
+        out.push_str(&payload[i..end]);
         out.push_str("\x1b\\");
         i = end;
         if !more {
             break;
         }
     }
+}
+
+/// Append the kitty APC command(s) that transmit-and-display the `img_w`x`img_h`
+/// packed-RGB buffer `rgb` as image `id`, filling `cols`x`rows` terminal cells.
+/// The payload is zlib-compressed (`o=z`) — essential once frames are upscaled.
+pub fn encode_image(
+    rgb: &[u8],
+    img_w: usize,
+    img_h: usize,
+    id: u32,
+    cols: u16,
+    rows: u16,
+    out: &mut String,
+) {
+    // Level 1: upscaled frames are mostly repeated blocks, so even the fastest
+    // setting compresses them to a fraction of their size.
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(rgb, 1);
+    let mut b64 = String::with_capacity(compressed.len().div_ceil(3) * 4);
+    base64_encode(&compressed, &mut b64);
+    let control =
+        format!("a=T,f=24,o=z,s={img_w},v={img_h},i={id},p=1,c={cols},r={rows},C=1,q=2");
+    push_chunked(&control, &b64, out);
 }
 
 /// Heuristic graphics-support detection from environment variables, covering
@@ -125,12 +153,25 @@ pub struct KittyScreen {
     rows: u16,
     off_c: usize,
     off_r: usize,
+    /// On-screen pixel size to upscale to (the cell rectangle's pixels), so the
+    /// image maps 1:1 and stays crisp. `None` when the terminal didn't report a
+    /// cell size — then we send the native frame and let it scale (softer).
+    target: Option<(usize, usize)>,
     overlay: Option<String>,
 }
 
 impl KittyScreen {
     pub fn new(width: usize, height: usize) -> Self {
-        Self { src_w: width, src_h: height, cols: 1, rows: 1, off_c: 0, off_r: 0, overlay: None }
+        Self {
+            src_w: width,
+            src_h: height,
+            cols: 1,
+            rows: 1,
+            off_c: 0,
+            off_r: 0,
+            target: None,
+            overlay: None,
+        }
     }
 
     /// Graphics scales to any terminal size; this is just a sane lower bound.
@@ -138,12 +179,20 @@ impl KittyScreen {
         (16, 8)
     }
 
-    pub fn set_viewport(&mut self, term_cols: usize, term_rows: usize) {
+    /// `cell_px` is the terminal's pixels-per-cell (width, height), used to size
+    /// the upscale target; `None` (terminal didn't report it) falls back to native.
+    pub fn set_viewport(
+        &mut self,
+        term_cols: usize,
+        term_rows: usize,
+        cell_px: Option<(usize, usize)>,
+    ) {
         let (c, r, oc, or) = fit_cells(self.src_w, self.src_h, term_cols, term_rows);
         self.cols = c as u16;
         self.rows = r as u16;
         self.off_c = oc;
         self.off_r = or;
+        self.target = cell_px.map(|(cw, ch)| (c * cw, r * ch));
     }
 
     /// No-op: every render re-emits the full image, so there's nothing to forget.
@@ -161,15 +210,19 @@ impl KittyScreen {
         use std::fmt::Write;
         // Place the image at its centered top-left; C=1 keeps the cursor here.
         write!(out, "\x1b[{};{}H", self.off_r + 1, self.off_c + 1).unwrap();
-        match &self.overlay {
+        let (tw, th) = self.target.unwrap_or((self.src_w, self.src_h));
+        // Composite the overlay at native res first, then upscale the whole frame
+        // so the badge scales with the image (matching the half-block overlay).
+        let rgb = match &self.overlay {
             Some(msg) => {
                 let mut framed = FrameBuffer::new(fb.width, fb.height);
                 framed.pixels.copy_from_slice(&fb.pixels);
                 draw_badge(&mut framed, msg);
-                encode_frame(&framed, IMAGE_ID, self.cols, self.rows, out);
+                nearest_upscale(&framed, tw, th)
             }
-            None => encode_frame(fb, IMAGE_ID, self.cols, self.rows, out),
-        }
+            None => nearest_upscale(fb, tw, th),
+        };
+        encode_image(&rgb, tw, th, IMAGE_ID, self.cols, self.rows, out);
     }
 }
 
@@ -226,31 +279,42 @@ mod tests {
     }
 
     #[test]
-    fn encode_frame_single_chunk_has_keys_and_rgb_payload() {
+    fn nearest_upscale_replicates_pixels() {
         let mut fb = FrameBuffer::new(2, 1);
-        fb.pixels = vec![Rgb(1, 2, 3), Rgb(4, 5, 6)];
-        let mut out = String::new();
-        encode_frame(&fb, 7, 20, 10, &mut out);
-        let header = "\x1b_Ga=T,f=24,s=2,v=1,i=7,p=1,c=20,r=10,C=1,q=2,m=0;";
-        assert!(out.starts_with(header), "got: {out:?}");
-        let payload = out.strip_prefix(header).unwrap().strip_suffix("\x1b\\").unwrap();
-        assert_eq!(payload, "AQIDBAUG"); // base64 of [1,2,3,4,5,6]
+        fb.pixels = vec![Rgb(10, 0, 0), Rgb(20, 0, 0)];
+        let up = nearest_upscale(&fb, 4, 2); // 2x each axis
+        assert_eq!(&up[0..3], &[10, 0, 0]); // (0,0) <- src 0
+        assert_eq!(&up[3..6], &[10, 0, 0]); // (1,0) <- src 0
+        assert_eq!(&up[6..9], &[20, 0, 0]); // (2,0) <- src 1
+        assert_eq!(&up[9..12], &[20, 0, 0]); // (3,0) <- src 1
+        assert_eq!(&up[12..15], &[10, 0, 0]); // row 1 replicates row 0
     }
 
     #[test]
-    fn encode_frame_chunks_large_payload() {
-        // 100x50 -> 15000 RGB bytes -> 20000 base64 chars -> 5 chunks of <=4096.
-        let fb = FrameBuffer::new(100, 50);
+    fn encode_image_emits_compressed_payload() {
+        let rgb = vec![1u8, 2, 3, 4, 5, 6]; // 2x1 RGB
         let mut out = String::new();
-        encode_frame(&fb, 1, 50, 25, &mut out);
-        assert!(out.starts_with("\x1b_Ga=T,f=24,s=100,v=50,i=1,p=1,c=50,r=25,C=1,q=2,m=1;"));
+        encode_image(&rgb, 2, 1, 7, 20, 10, &mut out);
+        assert!(out.contains("\x1b_Ga=T,f=24,o=z,s=2,v=1,i=7,p=1,c=20,r=10,C=1,q=2,m=0;"));
+        assert!(out.ends_with("\x1b\\"));
+        // The payload is base64(zlib(rgb)) — recover and compare to that exactly.
+        let payload = out.rsplit_once(';').unwrap().1.strip_suffix("\x1b\\").unwrap();
+        let mut expected = String::new();
+        base64_encode(&miniz_oxide::deflate::compress_to_vec_zlib(&rgb, 1), &mut expected);
+        assert_eq!(payload, expected);
+    }
+
+    #[test]
+    fn push_chunked_splits_at_4096() {
+        let payload: String = std::iter::repeat_n('A', 10000).collect();
+        let mut out = String::new();
+        push_chunked("a=T,f=24", &payload, &mut out);
+        assert!(out.starts_with("\x1b_Ga=T,f=24,m=1;"));
         assert!(out.contains("\x1b_Gm=1;")); // short continuation form
         assert_eq!(out.matches("m=0;").count(), 1); // exactly one final chunk
-        assert_eq!(out.matches("\x1b\\").count(), 5); // one terminator per chunk
-        // No single chunk's payload exceeds the protocol limit.
+        assert_eq!(out.matches("\x1b\\").count(), 3); // 4096 + 4096 + 1808
         for seg in out.split("\x1b\\").filter(|s| !s.is_empty()) {
-            let payload = seg.rsplit(';').next().unwrap();
-            assert!(payload.len() <= CHUNK, "chunk too big: {}", payload.len());
+            assert!(seg.rsplit(';').next().unwrap().len() <= CHUNK);
         }
     }
 
@@ -291,11 +355,11 @@ mod tests {
     #[test]
     fn render_emits_image_at_centered_offset() {
         let mut k = KittyScreen::new(4, 4);
-        k.set_viewport(20, 20); // fit_cells(4,4,20,20) -> 20x10 cells, off (0,5)
+        k.set_viewport(20, 20, None); // None cell_px -> native 4x4 (no upscale)
         let mut out = String::new();
         k.render(&FrameBuffer::new(4, 4), &mut out);
         assert!(out.starts_with("\x1b[6;1H"), "cursor not at centered offset: {out:?}");
-        assert!(out.contains("\x1b_Ga=T,f=24,s=4,v=4,"));
+        assert!(out.contains("\x1b_Ga=T,f=24,o=z,s=4,v=4,"));
         assert!(out.ends_with("\x1b\\"));
     }
 

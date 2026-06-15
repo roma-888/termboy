@@ -9,3 +9,4 @@ termboy-gb = { path = "../termboy-gb" }
 termboy-gba = { path = "../termboy-gba" }
 crossterm = "0.29"
 cpal = "0.16"
+miniz_oxide = "0.8" # zlib for the kitty graphics protocol's o=z compression

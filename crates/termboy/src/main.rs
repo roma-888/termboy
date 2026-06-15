@@ -259,10 +259,10 @@ impl Display {
         }
     }
 
-    fn set_viewport(&mut self, cols: usize, rows: usize) {
+    fn set_viewport(&mut self, cols: usize, rows: usize, cell_px: Option<(usize, usize)>) {
         match self {
             Display::Half(s) => s.set_viewport(cols, rows),
-            Display::Kitty(k) => k.set_viewport(cols, rows),
+            Display::Kitty(k) => k.set_viewport(cols, rows, cell_px),
         }
     }
 
@@ -399,6 +399,17 @@ fn main() -> ExitCode {
         }
         None => run_menu(palette, exact, keymap, use_kitty),
     }
+}
+
+/// Terminal pixels-per-cell `(width, height)`, used to upscale graphics frames
+/// to the exact on-screen size. `None` on terminals that don't report a pixel
+/// size — the kitty renderer then sends native frames and lets them scale.
+fn cell_pixels() -> Option<(usize, usize)> {
+    let ws = terminal::window_size().ok()?;
+    if ws.width == 0 || ws.height == 0 || ws.columns == 0 || ws.rows == 0 {
+        return None;
+    }
+    Some((ws.width as usize / ws.columns as usize, ws.height as usize / ws.rows as usize))
 }
 
 fn is_gba(path: &str) -> bool {
@@ -704,7 +715,7 @@ fn run_game<C: Core>(
         }
         if (cols, rows) != last_size {
             last_size = (cols, rows);
-            screen.set_viewport(cols as usize, rows as usize);
+            screen.set_viewport(cols as usize, rows as usize, cell_pixels());
             screen.invalidate();
             print!("\x1b[0m\x1b[2J"); // clear leftovers outside the (re)centered image
             std::io::stdout().flush().ok();
