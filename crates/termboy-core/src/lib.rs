@@ -1,5 +1,12 @@
 //! System-agnostic interface between emulator cores and the frontend.
 
+pub mod state;
+
+use state::StateError;
+
+/// Save-state format version. Bump on ANY layout change — old states then reject.
+pub const STATE_VERSION: u16 = 1;
+
 /// 24-bit RGB pixel. Cores map their native shades/palettes to RGB themselves,
 /// so the frontend never knows which system it is running.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -53,6 +60,16 @@ pub trait Core {
     /// Host audio sample rate (Hz). Cores without audio ignore it.
     fn set_audio_rate(&mut self, hz: u32) {
         let _ = hz;
+    }
+    /// Serialize full machine state (see [`state`]). Default: unsupported.
+    fn save_state(&self) -> Vec<u8> {
+        Vec::new()
+    }
+    /// Restore machine state from [`save_state`](Core::save_state) bytes.
+    /// Default: unsupported.
+    fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {
+        let _ = data;
+        Err(StateError::BadVersion)
     }
 }
 
