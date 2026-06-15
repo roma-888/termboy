@@ -54,6 +54,7 @@ throughput -- <rom.gba>`. That completes the GBA roadmap — cycle-exact timing
 | Shift + `1`–`0` | Load state from that slot |
 | `+` / `-` | Speed up / slow down (0.5x, 1x, 2x, 4x) |
 | M | Toggle audio mute |
+| Backspace (hold) | Rewind |
 | Esc | Quit |
 
 Save states capture the full machine and persist to `<rom>.ss0`…`<rom>.ss9`, so
@@ -65,6 +66,11 @@ kitty-protocol terminals; a state saved in one game won't load into another.)
 speed. Audio follows the speed — pitch-shifted up when fast-forwarding, down in
 slow motion, like a tape — and stays gap-free at every speed; `M` mutes it
 outright. Speed resets to `1x` on the next game.
+
+Hold **Backspace** to rewind: termboy snapshots the machine a few times a second
+into a memory-bounded ring and replays them backward while held (audio muted).
+Release to resume from that point. The window is whatever fits a ~128 MB budget
+— minutes on GB/GBC, around half a minute on GBA — and resets per game.
 
 Input feels best in a terminal supporting the kitty keyboard protocol
 (Ghostty, kitty, WezTerm, recent iTerm2/Alacritty) — real key-release events.

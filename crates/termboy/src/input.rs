@@ -85,6 +85,12 @@ impl Input {
         Self { enhanced, keymap, held: Buttons::default(), timers: [None; 16] }
     }
 
+    /// Whether the kitty keyboard protocol is active (real press/release).
+    /// Callers building their own hold-tracking (e.g. [`HoldKey`]) need it.
+    pub fn enhanced(&self) -> bool {
+        self.enhanced
+    }
+
     fn map(&self, code: KeyCode) -> Option<Buttons> {
         // case-insensitive chars: look up lowercased
         let code = match code {
@@ -119,6 +125,39 @@ impl Input {
             }
         }
         out
+    }
+}
+
+/// Hold-detection for a single non-button key (used for rewind). Mirrors the
+/// two input models the same way [`Input`] does: real press/release in kitty
+/// terminals, and timed key-repeat decay everywhere else — so "hold to act"
+/// works in both.
+pub struct HoldKey {
+    enhanced: bool,
+    held: bool,            // enhanced: live state
+    last: Option<Instant>, // fallback: last press/repeat event
+}
+
+impl HoldKey {
+    pub fn new(enhanced: bool) -> Self {
+        Self { enhanced, held: false, last: None }
+    }
+
+    /// Feed a key event for the tracked key (caller filters by key code first).
+    pub fn handle(&mut self, kind: KeyEventKind, now: Instant) {
+        if self.enhanced {
+            self.held = matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat);
+        } else if matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            self.last = Some(now);
+        }
+    }
+
+    pub fn is_held(&self, now: Instant) -> bool {
+        if self.enhanced {
+            self.held
+        } else {
+            self.last.is_some_and(|t| now.duration_since(t) < HOLD)
+        }
     }
 }
 
@@ -202,6 +241,25 @@ mod tests {
         let m = parse_keys("l=q").unwrap();
         assert_eq!(m[&KeyCode::Char('q')], Buttons::L);
         assert!(!m.contains_key(&KeyCode::Char('a')));
+    }
+
+    #[test]
+    fn holdkey_enhanced_tracks_press_and_release() {
+        let mut h = HoldKey::new(true);
+        let t0 = Instant::now();
+        h.handle(KeyEventKind::Press, t0);
+        assert!(h.is_held(t0 + Duration::from_secs(60))); // no time decay
+        h.handle(KeyEventKind::Release, t0);
+        assert!(!h.is_held(t0));
+    }
+
+    #[test]
+    fn holdkey_fallback_holds_for_window_then_releases() {
+        let mut h = HoldKey::new(false);
+        let t0 = Instant::now();
+        h.handle(KeyEventKind::Press, t0);
+        assert!(h.is_held(t0 + Duration::from_millis(100)));
+        assert!(!h.is_held(t0 + Duration::from_millis(250)));
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod audio;
 mod input;
 mod menu;
 mod playback;
+mod rewind;
 mod screen;
 
 use std::io::Write as _;
@@ -37,7 +38,7 @@ options:
   -h, --help         show this help
 
 controls: arrows = D-pad, X = A, Z = B, A/S = L/R, Enter = Start, Tab = Select
-          +/- = speed (0.5x-4x), M = mute, Esc = quit";
+          +/- = speed (0.5x-4x), M = mute, Backspace = rewind, Esc = quit";
 
 fn parse_palette(name: &str) -> Option<[Rgb; 4]> {
     match name {
@@ -526,12 +527,19 @@ fn run_game<C: Core>(
     let mut frames: u32 = 0;
     let mut overlay_until = Instant::now();
     let mut playback = playback::Playback::new();
+    let mut rewind = rewind::Rewind::new();
+    let mut rewind_key = input::HoldKey::new(input.enhanced());
     let code = 'game: loop {
         // Input: Esc quits, number keys drive save-state slots, the rest goes
         // to the button tracker.
         let now = Instant::now();
         while event::poll(Duration::ZERO).unwrap_or(false) {
             match event::read() {
+                // Backspace (any kind) drives hold-to-rewind, so it needs the
+                // release events too — handle it before the press-only arm.
+                Ok(Event::Key(k)) if k.code == KeyCode::Backspace => {
+                    rewind_key.handle(k.kind, now);
+                }
                 Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => {
                     if k.code == KeyCode::Esc {
                         break 'game ExitCode::SUCCESS;
@@ -590,14 +598,33 @@ fn run_game<C: Core>(
             std::io::stdout().flush().ok();
         }
 
-        let fb = core.run_frame(input.buttons(Instant::now()));
         out.clear();
-        screen.render(fb, &mut out);
-        core.drain_audio(&mut audio_buf);
-        if playback.is_muted() {
-            audio_buf.clear();
+        if rewind_key.is_held(now) {
+            // Rewind: step back through snapshots, newest first — one per frame,
+            // so it reverses at ~snapshot-interval speed. Audio is silenced
+            // (reverse audio is just noise). When the ring runs dry the screen
+            // simply freezes on the oldest available state.
+            if let Some(snap) = rewind.pop() {
+                let _ = core.load_state(&snap);
+                let fb = core.run_frame(Buttons::default());
+                screen.render(fb, &mut out);
+                core.drain_audio(&mut audio_buf);
+                audio_buf.clear();
+            }
+            screen.set_overlay("rewind");
+            overlay_until = now + Duration::from_millis(400);
         } else {
-            audio.push(&mut audio_buf);
+            let fb = core.run_frame(input.buttons(Instant::now()));
+            screen.render(fb, &mut out);
+            core.drain_audio(&mut audio_buf);
+            if playback.is_muted() {
+                audio_buf.clear();
+            } else {
+                audio.push(&mut audio_buf);
+            }
+            // Snapshot for rewind only on normal frames (the closure runs
+            // ~1/INTERVAL of the time, so save_state's cost is amortized).
+            rewind.record(|| core.save_state());
         }
         if !out.is_empty() {
             print!("{out}");
