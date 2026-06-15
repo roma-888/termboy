@@ -1,6 +1,7 @@
 //! Game Boy Advance core: ARM7TDMI CPU, coarse bus, bitmap-mode PPU, keypad.
 //! GbaCore is the frontend-facing entry point behind termboy_core::Core.
 
+pub mod apu;
 pub mod bios;
 pub mod bus;
 pub mod cpu;
