@@ -80,10 +80,6 @@ impl Menu {
         }
     }
 
-    pub fn screen(&self) -> Screen {
-        self.screen
-    }
-
     pub fn up(&mut self) {
         match self.screen {
             Screen::Main => self.main_sel = self.main_sel.saturating_sub(1),
@@ -375,7 +371,7 @@ mod tests {
         m.down();
         // 0 Resume, 1 Save, 2 Load
         assert_eq!(m.select(), Action::None); // Load -> opens LoadBrowser
-        assert_eq!(m.screen(), Screen::LoadBrowser);
+        assert_eq!(m.view().title, "LOAD STATE");
     }
 
     #[test]
@@ -385,9 +381,9 @@ mod tests {
         let mut m = menu();
         m.down(); // Save
         assert_eq!(m.select(), Action::None);
-        assert_eq!(m.screen(), Screen::SaveBrowser);
+        assert_eq!(m.view().title, "SAVE STATE");
         assert_eq!(m.back(), Action::None);
-        assert_eq!(m.screen(), Screen::Main);
+        assert_eq!(m.view().title, "PAUSED");
         assert_eq!(m.back(), Action::Resume); // Esc on Main resumes
     }
 

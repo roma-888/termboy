@@ -28,6 +28,8 @@ use termboy_core::{Buttons, Core, Rgb};
 use termboy_gb::{DMG_GREEN, GameBoy};
 use termboy_gba::GbaCore;
 
+use pause::Action;
+
 const USAGE: &str = "\
 usage: termboy [options] [rom.gb|rom.gba]
 
@@ -87,6 +89,15 @@ fn sav_path(rom_path: &str) -> PathBuf {
 /// Save-state slot file: `<rom>.ss0` … `<rom>.ss9`, derived from the `.sav` path.
 fn ss_path(sav: &Path, slot: u8) -> PathBuf {
     sav.with_extension(format!("ss{slot}"))
+}
+
+/// Which save-state slots already have a file on disk (for the browser markers).
+fn slots_filled(sav: &Path) -> [bool; pause::SLOTS] {
+    let mut s = [false; pause::SLOTS];
+    for (i, filled) in s.iter_mut().enumerate() {
+        *filled = ss_path(sav, i as u8).exists();
+    }
+    s
 }
 
 /// If `k` is a save-state slot key, perform the action and return the overlay
@@ -893,10 +904,115 @@ fn run_game<C: Core>(
     let mut recorder: Option<capture::Recorder> = None;
     let mut screenshot_pending = false;
     let mut capture_tick: u32 = 0;
+    let mut last_fb: Option<termboy_core::FrameBuffer> = None;
+    let mut paused: Option<pause::Menu> = None;
+    let mut menu_dirty = false;
     let code = 'game: loop {
-        // Input: Esc quits, number keys drive save-state slots, the rest goes
-        // to the button tracker.
+        // Input: Esc opens the pause menu, number keys drive save-state slots,
+        // the rest goes to the button tracker.
         let now = Instant::now();
+
+        if paused.is_some() {
+            // --- PAUSED: drive the menu; no emulation runs. ---
+            // Keep the panel centered if the terminal was resized.
+            let (cols, rows) = terminal::size().unwrap_or((0, 0));
+            if (cols, rows) != last_size {
+                last_size = (cols, rows);
+                renderer.viewport(cols as usize, rows as usize, cell_pixels());
+                renderer.invalidate();
+                renderer.raw("\x1b[0m\x1b[2J".to_string());
+                menu_dirty = true;
+            }
+            if menu_dirty {
+                if let Some(fb) = &last_fb {
+                    renderer.frame(pause::compose_menu(fb, &paused.as_ref().unwrap().view()), None);
+                }
+                menu_dirty = false;
+            }
+            // Block briefly for input so we don't busy-spin while paused.
+            if event::poll(Duration::from_millis(100)).unwrap_or(false) {
+                if let Ok(Event::Key(k)) = event::read() {
+                    if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                        let action = {
+                            let menu = paused.as_mut().unwrap();
+                            match k.code {
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    menu.up();
+                                    Action::None
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    menu.down();
+                                    Action::None
+                                }
+                                KeyCode::Left => menu.left(),
+                                KeyCode::Right => menu.right(),
+                                KeyCode::Enter => menu.select(),
+                                KeyCode::Esc => menu.back(),
+                                _ => Action::None,
+                            }
+                        };
+                        menu_dirty = true;
+                        match action {
+                            Action::None => {}
+                            Action::SpeedFaster => {
+                                playback.faster();
+                                core.set_audio_rate(playback.audio_rate(audio.sample_rate));
+                                paused.as_mut().unwrap().set_speed_label(playback.multiplier_label());
+                            }
+                            Action::SpeedSlower => {
+                                playback.slower();
+                                core.set_audio_rate(playback.audio_rate(audio.sample_rate));
+                                paused.as_mut().unwrap().set_speed_label(playback.multiplier_label());
+                            }
+                            Action::ToggleMute => {
+                                playback.toggle_mute();
+                                paused.as_mut().unwrap().set_muted(playback.is_muted());
+                            }
+                            Action::Resume => {
+                                paused = None;
+                                input.release_all();
+                                renderer.invalidate();
+                                last_size = (0, 0);
+                                next_emu = Instant::now();
+                            }
+                            Action::Save(slot) => {
+                                overlay = Some(
+                                    match write_save(&ss_path(sav, slot as u8), &core.save_state()) {
+                                        Ok(()) => format!("saved {slot}"),
+                                        Err(_) => format!("failed {slot}"),
+                                    },
+                                );
+                                overlay_until = Instant::now() + Duration::from_millis(1500);
+                                paused = None;
+                                input.release_all();
+                                renderer.invalidate();
+                                last_size = (0, 0);
+                                next_emu = Instant::now();
+                            }
+                            Action::Load(slot) => {
+                                overlay = Some(match std::fs::read(ss_path(sav, slot as u8)) {
+                                    Ok(d) => match core.load_state(&d) {
+                                        Ok(()) => format!("loaded {slot}"),
+                                        Err(_) => format!("failed {slot}"),
+                                    },
+                                    Err(_) => format!("empty {slot}"),
+                                });
+                                overlay_until = Instant::now() + Duration::from_millis(1500);
+                                paused = None;
+                                input.release_all();
+                                renderer.invalidate();
+                                last_size = (0, 0);
+                                next_emu = Instant::now();
+                            }
+                            Action::Library => break 'game GameExit::Library,
+                            Action::Quit => break 'game GameExit::Quit,
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
         while event::poll(Duration::ZERO).unwrap_or(false) {
             match event::read() {
                 // Backspace (any kind) drives hold-to-rewind, so it needs the
@@ -906,7 +1022,17 @@ fn run_game<C: Core>(
                 }
                 Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => {
                     if k.code == KeyCode::Esc {
-                        break 'game GameExit::Quit;
+                        // Open the pause menu (a frame must exist to dim behind it).
+                        if last_fb.is_some() {
+                            paused = Some(pause::Menu::new(
+                                has_library,
+                                playback.multiplier_label(),
+                                playback.is_muted(),
+                                slots_filled(sav),
+                            ));
+                            menu_dirty = true;
+                            continue 'game;
+                        }
                     }
                     if let Some(msg) = handle_capture_key(&k, &mut screenshot_pending, &mut recorder, sav) {
                         if !msg.is_empty() {
@@ -992,6 +1118,7 @@ fn run_game<C: Core>(
                 let fb = core.run_frame(buttons);
                 if i + 1 == due {
                     renderer.frame(fb.clone(), overlay.clone());
+                    last_fb = Some(fb.clone());
                     if screenshot_pending {
                         screenshot_pending = false;
                         let path = capture_path(sav, "images");
