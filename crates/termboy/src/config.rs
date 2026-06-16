@@ -20,6 +20,7 @@ pub struct Settings {
     pub exact: bool,
     pub speed: f64,
     pub muted: bool,
+    pub color_correct: bool,
 }
 
 impl Default for Settings {
@@ -31,6 +32,7 @@ impl Default for Settings {
             exact: false,
             speed: 1.0,
             muted: false,
+            color_correct: false,
         }
     }
 }
@@ -71,6 +73,7 @@ pub fn apply_setting(s: &mut Settings, key: &str, value: &str) -> Result<(), Str
         }
         "exact" => s.exact = parse_bool(value)?,
         "mute" => s.muted = parse_bool(value)?,
+        "color-correct" => s.color_correct = parse_bool(value)?,
         "speed" => {
             s.speed = match value {
                 "0.5" => 0.5,
@@ -150,6 +153,9 @@ const TEMPLATE: &str = "\
 
 # mute: true starts with audio muted
 # mute = false
+
+# color-correct: GBA only — true applies hardware-accurate color correction
+# color-correct = false
 ";
 
 /// Write the commented starter config to `path` if nothing is there yet, so a
@@ -178,6 +184,7 @@ mod tests {
         assert!(!s.exact);
         assert_eq!(s.speed, 1.0);
         assert!(!s.muted);
+        assert!(!s.color_correct);
         assert!(matches!(s.graphics, GraphicsPref::Auto));
     }
 
@@ -194,6 +201,8 @@ mod tests {
         assert_eq!(s.speed, 2.0);
         apply_setting(&mut s, "mute", "true").unwrap();
         assert!(s.muted);
+        apply_setting(&mut s, "color-correct", "true").unwrap();
+        assert!(s.color_correct);
         apply_setting(&mut s, "keys", "a=k,start=space").unwrap();
         assert_eq!(s.keymap[&KeyCode::Char('k')], Buttons::A);
     }
@@ -206,6 +215,7 @@ mod tests {
         assert!(apply_setting(&mut s, "exact", "yes").is_err());
         assert!(apply_setting(&mut s, "speed", "3").is_err());
         assert!(apply_setting(&mut s, "keys", "warp=k").is_err());
+        assert!(apply_setting(&mut s, "color-correct", "maybe").is_err());
         assert!(apply_setting(&mut s, "nonsense", "x").is_err());
     }
 

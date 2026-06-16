@@ -39,6 +39,7 @@ options:
                      half-blocks). auto uses kitty graphics on Ghostty/kitty/WezTerm
   --keys <spec>      'swap' (A/B swapped) or per-button: 'a=k,b=j,start=space'
   --config <path>    use this file instead of ~/.config/termboy/config
+  --color-correct    GBA only: hardware color correction (off by default)
   --headless         run without UI, print serial output (debug tool)
   -h, --help         show this help
 
@@ -449,6 +450,7 @@ fn main() -> ExitCode {
     }
     let headless = args.iter().any(|a| a == "--headless");
     let exact = args.iter().any(|a| a == "--exact");
+    let color_correct = args.iter().any(|a| a == "--color-correct");
     // Defaults < config file < CLI flags.
     let mut settings = config::Settings::default();
     match config_path_arg(&args) {
@@ -498,6 +500,9 @@ fn main() -> ExitCode {
     }
     if exact {
         settings.exact = true;
+    }
+    if color_correct {
+        settings.color_correct = true;
     }
     match rom_arg {
         Some(path) if is_gba(path) => {
@@ -612,7 +617,8 @@ fn run_menu(settings: &config::Settings) -> ExitCode {
         let path = roms[i].path.to_string_lossy().into_owned();
         let launch_err = if roms[i].kind == menu::Kind::Advance {
             match load_gba(&path) {
-                Ok(core) => {
+                Ok(mut core) => {
+                    core.set_color_correction(settings.color_correct);
                     let mut input = input::Input::new(guard.enhanced, settings.keymap.clone());
                     let screen = Display::new(use_kitty, 240, 160);
                     print!("\x1b[0m\x1b[2J");
@@ -629,7 +635,8 @@ fn run_menu(settings: &config::Settings) -> ExitCode {
             }
         } else {
             match load_game(&path, settings.palette) {
-                Ok((gb, sav)) => {
+                Ok((mut gb, sav)) => {
+                    gb.set_color_correction(settings.color_correct);
                     let mut input = input::Input::new(guard.enhanced, settings.keymap.clone());
                     let screen = Display::new(use_kitty, 160, 144);
                     print!("\x1b[0m\x1b[2J");
@@ -766,7 +773,7 @@ fn install_panic_hook() {
 }
 
 fn run_terminal<C: Core>(
-    core: C,
+    mut core: C,
     width: usize,
     height: usize,
     sav: &Path,
@@ -783,6 +790,7 @@ fn run_terminal<C: Core>(
     let mut input = input::Input::new(guard.enhanced, settings.keymap.clone());
     let screen = Display::new(settings.graphics.use_kitty(), width, height);
     let audio = audio::Audio::new();
+    core.set_color_correction(settings.color_correct);
     let playback = playback::Playback::with(settings.speed, settings.muted);
     run_game(core, settings.exact, sav, &mut input, screen, &audio, playback)
 }
