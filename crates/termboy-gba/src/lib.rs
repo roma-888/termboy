@@ -4,6 +4,7 @@
 pub mod apu;
 pub mod bios;
 pub mod bus;
+mod color;
 pub mod cpu;
 pub mod dma;
 pub mod eeprom;
