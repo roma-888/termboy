@@ -92,19 +92,50 @@ fn ss_path(sav: &Path, slot: u8) -> PathBuf {
     sav.with_extension(format!("ss{slot}"))
 }
 
-/// Which save-state slots already have a file on disk (for the browser markers).
-fn slots_filled(sav: &Path) -> [bool; pause::SLOTS] {
-    let mut s = [false; pause::SLOTS];
-    for (i, filled) in s.iter_mut().enumerate() {
-        *filled = ss_path(sav, i as u8).exists();
-    }
-    s
+/// Thumbnail sidecar for a slot: `<rom>.ssN.thumb` (append, not replace `.ssN`).
+fn thumb_path(sav: &Path, slot: u8) -> PathBuf {
+    let mut s = ss_path(sav, slot).into_os_string();
+    s.push(".thumb");
+    PathBuf::from(s)
+}
+
+/// Best-effort: write a thumbnail of `fb` beside slot `slot`'s state file.
+fn write_thumb(sav: &Path, slot: u8, fb: &termboy_core::FrameBuffer) {
+    let _ = std::fs::write(thumb_path(sav, slot), thumb::encode(fb));
+}
+
+/// Load per-slot info (filled? + mtime age + decoded thumbnail) for the browser.
+fn load_slots(sav: &Path) -> Vec<pause::SlotInfo> {
+    let now = std::time::SystemTime::now();
+    (0..pause::SLOTS)
+        .map(|i| {
+            let ssp = ss_path(sav, i as u8);
+            let filled = ssp.exists();
+            let age = if filled {
+                std::fs::metadata(&ssp)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| now.duration_since(t).ok())
+                    .map(|d| pause::age_label(d.as_secs()))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let thumb = std::fs::read(thumb_path(sav, i as u8)).ok().and_then(|b| thumb::decode(&b));
+            pause::SlotInfo { filled, age, thumb }
+        })
+        .collect()
 }
 
 /// If `k` is a save-state slot key, perform the action and return the overlay
 /// message. Bare digit `N` saves to slot N; the shifted digit (kitty terminals
 /// report digit+SHIFT, legacy ones report the symbol) loads it.
-fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<String> {
+fn handle_slot_key<C: Core>(
+    k: &KeyEvent,
+    core: &mut C,
+    sav: &Path,
+    fb: Option<&termboy_core::FrameBuffer>,
+) -> Option<String> {
     let KeyCode::Char(c) = k.code else { return None };
     let digit = |c: char| c.to_digit(10).map(|d| d as u8);
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
@@ -113,7 +144,12 @@ fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<St
     if c.is_ascii_digit() && !shift {
         let slot = digit(c).unwrap();
         return Some(match write_save(&ss_path(sav, slot), &core.save_state()) {
-            Ok(()) => format!("saved {slot}"),
+            Ok(()) => {
+                if let Some(fb) = fb {
+                    write_thumb(sav, slot, fb);
+                }
+                format!("saved {slot}")
+            }
             Err(_) => format!("failed {slot}"),
         });
     }
@@ -1015,7 +1051,12 @@ fn run_game<C: Core>(
                             Action::Save(slot) => {
                                 overlay = Some(
                                     match write_save(&ss_path(sav, slot as u8), &core.save_state()) {
-                                        Ok(()) => format!("saved {slot}"),
+                                        Ok(()) => {
+                                            if let Some(fb) = &last_fb {
+                                                write_thumb(sav, slot as u8, fb);
+                                            }
+                                            format!("saved {slot}")
+                                        }
                                         Err(_) => format!("failed {slot}"),
                                     },
                                 );
@@ -1065,7 +1106,7 @@ fn run_game<C: Core>(
                                 has_library,
                                 playback.multiplier_label(),
                                 playback.is_muted(),
-                                slots_filled(sav),
+                                load_slots(sav),
                             ));
                             menu_dirty = true;
                             continue 'game;
@@ -1076,7 +1117,7 @@ fn run_game<C: Core>(
                             overlay = Some(msg);
                             overlay_until = Instant::now() + Duration::from_millis(1500);
                         }
-                    } else if let Some(msg) = handle_slot_key(&k, &mut core, sav) {
+                    } else if let Some(msg) = handle_slot_key(&k, &mut core, sav, last_fb.as_ref()) {
                         overlay = Some(msg);
                         overlay_until = Instant::now() + Duration::from_millis(1500);
                     } else if let Some(msg) = handle_playback_key(&k, &mut playback) {

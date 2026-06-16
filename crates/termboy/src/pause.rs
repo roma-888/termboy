@@ -6,9 +6,13 @@
 use termboy_core::{FrameBuffer, Rgb};
 
 use crate::screen::{glyph, GLYPH_H, GLYPH_W};
+use crate::thumb::Thumb;
 
 /// Number of save-state slots (digits 0-9).
 pub const SLOTS: usize = 10;
+
+/// Columns in the save/load thumbnail grid (10 slots -> 5x2).
+pub const GRID_COLS: usize = 5;
 
 /// Compact "time ago" for a slot's save file, from seconds elapsed.
 pub fn age_label(secs: u64) -> String {
@@ -57,12 +61,20 @@ enum MainItem {
     Quit,
 }
 
+/// Per-slot info the frontend loads when the menu opens (filled? + age string +
+/// decoded thumbnail). Held by `Menu`, projected into a `Cell` for the view.
+pub struct SlotInfo {
+    pub filled: bool,
+    pub age: String,
+    pub thumb: Option<crate::thumb::Thumb>,
+}
+
 pub struct Menu {
     screen: Screen,
     items: Vec<MainItem>,
     main_sel: usize,
     slot_sel: usize,
-    slots: [bool; SLOTS],
+    slots: Vec<SlotInfo>,
     speed_label: String,
     muted: bool,
 }
@@ -70,7 +82,7 @@ pub struct Menu {
 impl Menu {
     /// `has_library` is false on a direct-ROM launch (no picker to return to),
     /// which hides the "Back to library" row. `slots[i]` marks an occupied slot.
-    pub fn new(has_library: bool, speed_label: String, muted: bool, slots: [bool; SLOTS]) -> Self {
+    pub fn new(has_library: bool, speed_label: String, muted: bool, slots: Vec<SlotInfo>) -> Self {
         let mut items = vec![
             MainItem::Resume,
             MainItem::Save,
@@ -96,41 +108,66 @@ impl Menu {
     pub fn up(&mut self) {
         match self.screen {
             Screen::Main => self.main_sel = self.main_sel.saturating_sub(1),
-            _ => self.slot_sel = self.slot_sel.saturating_sub(1),
+            _ => {
+                if self.slot_sel >= GRID_COLS {
+                    self.slot_sel -= GRID_COLS;
+                }
+            }
         }
     }
 
     pub fn down(&mut self) {
         match self.screen {
             Screen::Main => self.main_sel = (self.main_sel + 1).min(self.items.len() - 1),
-            _ => self.slot_sel = (self.slot_sel + 1).min(SLOTS - 1),
-        }
-    }
-
-    /// `<-`: slow down on the Speed row; elsewhere a no-op.
-    pub fn left(&mut self) -> Action {
-        if self.screen == Screen::Main && self.items[self.main_sel] == MainItem::Speed {
-            Action::SpeedSlower
-        } else {
-            Action::None
-        }
-    }
-
-    /// `->`: speed up on the Speed row; open the browser on Save/Load; else no-op.
-    pub fn right(&mut self) -> Action {
-        if self.screen == Screen::Main {
-            match self.items[self.main_sel] {
-                MainItem::Speed => return Action::SpeedFaster,
-                MainItem::Save => {
-                    self.enter(Screen::SaveBrowser);
+            _ => {
+                if self.slot_sel + GRID_COLS < SLOTS {
+                    self.slot_sel += GRID_COLS;
                 }
-                MainItem::Load => {
-                    self.enter(Screen::LoadBrowser);
-                }
-                _ => {}
             }
         }
-        Action::None
+    }
+
+    /// `<-`: slow down on the Speed row; move left in the browser grid.
+    pub fn left(&mut self) -> Action {
+        match self.screen {
+            Screen::Main => {
+                if self.items[self.main_sel] == MainItem::Speed {
+                    return Action::SpeedSlower;
+                }
+                Action::None
+            }
+            _ => {
+                if self.slot_sel % GRID_COLS != 0 {
+                    self.slot_sel -= 1;
+                }
+                Action::None
+            }
+        }
+    }
+
+    /// `->`: speed up / open a browser on the main screen; move right in the grid.
+    pub fn right(&mut self) -> Action {
+        match self.screen {
+            Screen::Main => {
+                match self.items[self.main_sel] {
+                    MainItem::Speed => return Action::SpeedFaster,
+                    MainItem::Save => {
+                        self.enter(Screen::SaveBrowser);
+                    }
+                    MainItem::Load => {
+                        self.enter(Screen::LoadBrowser);
+                    }
+                    _ => {}
+                }
+                Action::None
+            }
+            _ => {
+                if self.slot_sel % GRID_COLS != GRID_COLS - 1 && self.slot_sel + 1 < SLOTS {
+                    self.slot_sel += 1;
+                }
+                Action::None
+            }
+        }
     }
 
     /// `Enter`.
@@ -196,21 +233,26 @@ impl Menu {
                     .collect();
                 MenuView {
                     title: "PAUSED".into(),
-                    rows,
                     selected: self.main_sel,
                     hint: "UP DOWN MOVE  ENTER OK  ESC BACK".into(),
+                    body: Body::List(rows),
                 }
             }
             Screen::SaveBrowser | Screen::LoadBrowser => {
-                let rows = (0..SLOTS)
-                    .map(|i| Row::kv(&format!("SLOT {i}"), if self.slots[i] { "SAVED" } else { "EMPTY" }))
+                let cells = (0..SLOTS)
+                    .map(|i| Cell {
+                        num: format!("{i}"),
+                        age: self.slots[i].age.clone(),
+                        filled: self.slots[i].filled,
+                        thumb: self.slots[i].thumb.clone(),
+                    })
                     .collect();
                 let title = if self.screen == Screen::SaveBrowser { "SAVE STATE" } else { "LOAD STATE" };
                 MenuView {
                     title: title.into(),
-                    rows,
                     selected: self.slot_sel,
-                    hint: "ENTER OK  ESC BACK".into(),
+                    hint: "MOVE  ENTER OK  ESC BACK".into(),
+                    body: Body::Grid(cells),
                 }
             }
         }
@@ -220,9 +262,23 @@ impl Menu {
 /// A render-ready snapshot of the current screen (built by `Menu::view`).
 pub struct MenuView {
     pub title: String,
-    pub rows: Vec<Row>,
     pub selected: usize,
     pub hint: String,
+    pub body: Body,
+}
+
+/// The body of a screen: a vertical list (main) or a thumbnail grid (browser).
+pub enum Body {
+    List(Vec<Row>),
+    Grid(Vec<Cell>),
+}
+
+/// One save-slot cell in the browser grid.
+pub struct Cell {
+    pub num: String,
+    pub age: String,
+    pub filled: bool,
+    pub thumb: Option<crate::thumb::Thumb>,
 }
 
 pub struct Row {
@@ -248,6 +304,7 @@ const TEXT: Rgb = Rgb(214, 216, 224);
 const SEL_BG: Rgb = Rgb(70, 84, 140);
 const SEL_TEXT: Rgb = Rgb(255, 255, 255);
 const HINT: Rgb = Rgb(120, 122, 134);
+const CELL_BG: Rgb = Rgb(28, 30, 42);
 
 fn dim_px(p: Rgb) -> Rgb {
     Rgb(
@@ -281,10 +338,10 @@ fn text_width(text: &str, scale: usize) -> usize {
     }
 }
 
-/// Widest rendered line (title, hint, or a label+value row) at `scale`.
-fn widest(view: &MenuView, scale: usize) -> usize {
-    let mut w = text_width(&view.title, scale).max(text_width(&view.hint, scale));
-    for r in &view.rows {
+/// Widest rendered line among the title, hint, and label+value rows at `scale`.
+fn list_widest(title: &str, hint: &str, rows: &[Row], scale: usize) -> usize {
+    let mut w = text_width(title, scale).max(text_width(hint, scale));
+    for r in rows {
         let rw = text_width(&r.label, scale)
             + if r.value.is_empty() { 0 } else { 4 * scale + text_width(&r.value, scale) };
         w = w.max(rw);
@@ -309,84 +366,181 @@ fn draw_text(fb: &mut FrameBuffer, x: usize, y: usize, scale: usize, text: &str,
     }
 }
 
+/// Draw a `t`-thick rectangle outline.
+fn border(fb: &mut FrameBuffer, x: usize, y: usize, w: usize, h: usize, t: usize, c: Rgb) {
+    fill_rect(fb, x, y, w, t, c);
+    fill_rect(fb, x, y + h.saturating_sub(t), w, t, c);
+    fill_rect(fb, x, y, t, h, c);
+    fill_rect(fb, x + w.saturating_sub(t), y, t, h, c);
+}
+
+/// Nearest-scale `t` to fit (preserving aspect) centered in the `area_w`x`area_h`
+/// box at (x, y).
+fn blit_thumb(fb: &mut FrameBuffer, x: usize, y: usize, area_w: usize, area_h: usize, t: &Thumb) {
+    if t.width == 0 || t.height == 0 || area_w == 0 || area_h == 0 {
+        return;
+    }
+    let s = (area_w * 1000 / t.width).min(area_h * 1000 / t.height);
+    let dw = (t.width * s / 1000).max(1);
+    let dh = (t.height * s / 1000).max(1);
+    let ox = x + area_w.saturating_sub(dw) / 2;
+    let oy = y + area_h.saturating_sub(dh) / 2;
+    for ddy in 0..dh {
+        let sy = ddy * t.height / dh;
+        for ddx in 0..dw {
+            let sx = ddx * t.width / dw;
+            put(fb, ox + ddx, oy + ddy, t.pixels[sy * t.width + sx]);
+        }
+    }
+}
+
 /// Dim a copy of `fb` and draw the menu `view` as a centered floating panel.
-/// Rows are windowed around the selection so any count fits any frame size.
 pub fn compose_menu(fb: &FrameBuffer, view: &MenuView) -> FrameBuffer {
     let mut out = FrameBuffer::new(fb.width, fb.height);
     for (i, p) in fb.pixels.iter().enumerate() {
         out.pixels[i] = dim_px(*p);
     }
+    match &view.body {
+        Body::List(rows) => draw_list_panel(&mut out, view, rows),
+        Body::Grid(cells) => draw_grid_panel(&mut out, view, cells),
+    }
+    out
+}
 
-    // The panel floats with margins (~85% of the frame at most) and its text is
-    // crisp at the kitty path's display resolution. Pick the largest glyph scale
-    // — capped to a sane size — whose panel (widest line, up to 8 rows + chrome)
-    // fits those margins; smaller frames or longer hints just shrink the text.
-    let max_w = fb.width * 85 / 100;
-    let max_h = fb.height * 85 / 100;
-    let mut scale = (fb.height / 110).clamp(1, 14);
+/// The main-screen list: a floating panel sized to fit within ~85% margins; rows
+/// windowed around the selection so any count fits any frame size.
+fn draw_list_panel(out: &mut FrameBuffer, view: &MenuView, rows: &[Row]) {
+    let (w, h) = (out.width, out.height);
+    let max_w = w * 85 / 100;
+    let max_h = h * 85 / 100;
+    let mut scale = (h / 110).clamp(1, 14);
     while scale > 1 {
         let pad = 3 * scale;
         let line_h = GLYPH_H * scale + scale;
-        let want_rows = view.rows.len().min(8);
-        let panel_w = widest(view, scale) + 2 * pad;
+        let want_rows = rows.len().min(8);
+        let panel_w = list_widest(&view.title, &view.hint, rows, scale) + 2 * pad;
         let panel_h = 2 * pad + 2 * line_h + 2 * scale + want_rows * line_h;
         if panel_w <= max_w && panel_h <= max_h {
             break;
         }
         scale -= 1;
     }
-    let line_h = GLYPH_H * scale + scale; // glyph height + 1px gap, scaled
+    let line_h = GLYPH_H * scale + scale;
     let pad = 3 * scale;
-    let gap = scale; // space around the title / hint
+    let gap = scale;
 
-    // Window the rows to what fits the height budget, around the selection.
     let avail = max_h.saturating_sub(2 * pad + 2 * line_h + 2 * gap);
     let max_rows = (avail / line_h).max(1);
-    let visible = view.rows.len().min(max_rows);
+    let visible = rows.len().min(max_rows);
     let top = if view.selected >= visible { view.selected + 1 - visible } else { 0 };
 
-    let panel_w = (widest(view, scale) + 2 * pad).min(max_w);
+    let panel_w = (list_widest(&view.title, &view.hint, rows, scale) + 2 * pad).min(max_w);
     let panel_h = (pad + line_h + gap + visible * line_h + gap + line_h + pad).min(max_h);
-    let px = (fb.width - panel_w) / 2;
-    let py = (fb.height - panel_h) / 2;
+    let px = (w - panel_w) / 2;
+    let py = (h - panel_h) / 2;
 
-    // Background + 1px (scaled) border.
-    fill_rect(&mut out, px, py, panel_w, panel_h, BG);
-    fill_rect(&mut out, px, py, panel_w, scale, BORDER);
-    fill_rect(&mut out, px, py + panel_h - scale, panel_w, scale, BORDER);
-    fill_rect(&mut out, px, py, scale, panel_h, BORDER);
-    fill_rect(&mut out, px + panel_w - scale, py, scale, panel_h, BORDER);
+    fill_rect(out, px, py, panel_w, panel_h, BG);
+    border(out, px, py, panel_w, panel_h, scale, BORDER);
 
     let mut y = py + pad;
-
-    // Title, centered.
     let tw = text_width(&view.title, scale);
-    draw_text(&mut out, px + panel_w.saturating_sub(tw) / 2, y, scale, &view.title, TITLE);
+    draw_text(out, px + panel_w.saturating_sub(tw) / 2, y, scale, &view.title, TITLE);
     y += line_h + gap;
 
-    // Rows (windowed), label left, value right, selected row highlighted.
     for idx in top..top + visible {
-        let r = &view.rows[idx];
+        let r = &rows[idx];
         let color = if idx == view.selected {
-            fill_rect(&mut out, px + scale, y, panel_w.saturating_sub(2 * scale), line_h, SEL_BG);
+            fill_rect(out, px + scale, y, panel_w.saturating_sub(2 * scale), line_h, SEL_BG);
             SEL_TEXT
         } else {
             TEXT
         };
-        draw_text(&mut out, px + pad, y, scale, &r.label, color);
+        draw_text(out, px + pad, y, scale, &r.label, color);
         if !r.value.is_empty() {
             let vw = text_width(&r.value, scale);
-            draw_text(&mut out, px + panel_w - pad - vw, y, scale, &r.value, color);
+            draw_text(out, px + panel_w - pad - vw, y, scale, &r.value, color);
         }
         y += line_h;
     }
     y += gap;
 
-    // Hint, centered and dim.
     let hw = text_width(&view.hint, scale);
-    draw_text(&mut out, px + panel_w.saturating_sub(hw) / 2, y, scale, &view.hint, HINT);
+    draw_text(out, px + panel_w.saturating_sub(hw) / 2, y, scale, &view.hint, HINT);
+}
 
-    out
+/// The save/load browser: a grid of slot cells, each a thumbnail (or EMPTY) with
+/// a "N age" label, selected cell outlined.
+fn draw_grid_panel(out: &mut FrameBuffer, view: &MenuView, cells: &[Cell]) {
+    let (w, h) = (out.width, out.height);
+    let scale = (h / 240).clamp(1, 6); // label text scale
+    let pad = 4 * scale;
+    let line_h = GLYPH_H * scale + scale;
+
+    let panel_w = w * 90 / 100;
+    let panel_h = h * 85 / 100;
+    let px = (w - panel_w) / 2;
+    let py = (h - panel_h) / 2;
+    fill_rect(out, px, py, panel_w, panel_h, BG);
+    border(out, px, py, panel_w, panel_h, scale, BORDER);
+
+    let tw = text_width(&view.title, scale);
+    draw_text(out, px + panel_w.saturating_sub(tw) / 2, py + pad, scale, &view.title, TITLE);
+    let hw = text_width(&view.hint, scale);
+    draw_text(
+        out,
+        px + panel_w.saturating_sub(hw) / 2,
+        py + panel_h - pad - GLYPH_H * scale,
+        scale,
+        &view.hint,
+        HINT,
+    );
+
+    let grid_rows = cells.len().div_ceil(GRID_COLS).max(1);
+    let gx = px + pad;
+    let gy = py + pad + line_h + pad;
+    let gw = panel_w.saturating_sub(2 * pad);
+    let gh = panel_h.saturating_sub(2 * pad + 2 * line_h + 2 * pad);
+    let cgap = 2 * scale;
+    let cell_w = gw.saturating_sub((GRID_COLS - 1) * cgap) / GRID_COLS;
+    let cell_h = gh.saturating_sub((grid_rows - 1) * cgap) / grid_rows;
+    let label_h = line_h + scale;
+
+    for (i, cell) in cells.iter().enumerate() {
+        let (r, c) = (i / GRID_COLS, i % GRID_COLS);
+        let cx = gx + c * (cell_w + cgap);
+        let cy = gy + r * (cell_h + cgap);
+        let selected = i == view.selected;
+        fill_rect(out, cx, cy, cell_w, cell_h, if selected { SEL_BG } else { CELL_BG });
+
+        let thumb_h = cell_h.saturating_sub(label_h);
+        match &cell.thumb {
+            Some(t) => blit_thumb(out, cx, cy, cell_w, thumb_h, t),
+            None => {
+                let ew = text_width("EMPTY", scale);
+                draw_text(
+                    out,
+                    cx + cell_w.saturating_sub(ew) / 2,
+                    cy + thumb_h.saturating_sub(GLYPH_H * scale) / 2,
+                    scale,
+                    "EMPTY",
+                    TEXT,
+                );
+            }
+        }
+
+        let label = if cell.filled && !cell.age.is_empty() {
+            format!("{} {}", cell.num, cell.age)
+        } else {
+            cell.num.clone()
+        };
+        let lw = text_width(&label, scale);
+        let lcolor = if selected { SEL_TEXT } else { TEXT };
+        draw_text(out, cx + cell_w.saturating_sub(lw) / 2, cy + cell_h - line_h, scale, &label, lcolor);
+
+        if selected {
+            border(out, cx, cy, cell_w, cell_h, scale, SEL_TEXT);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -394,7 +548,25 @@ mod tests {
     use super::*;
 
     fn menu() -> Menu {
-        Menu::new(true, "1x".into(), false, [false; SLOTS])
+        Menu::new(true, "1x".into(), false, empty_slots())
+    }
+
+    fn empty_slots() -> Vec<SlotInfo> {
+        (0..SLOTS).map(|_| SlotInfo { filled: false, age: String::new(), thumb: None }).collect()
+    }
+
+    fn list_rows(v: &MenuView) -> &Vec<Row> {
+        match &v.body {
+            Body::List(r) => r,
+            Body::Grid(_) => panic!("expected a list body"),
+        }
+    }
+
+    fn grid_cells(v: &MenuView) -> &Vec<Cell> {
+        match &v.body {
+            Body::Grid(c) => c,
+            Body::List(_) => panic!("expected a grid body"),
+        }
     }
 
     #[test]
@@ -424,17 +596,31 @@ mod tests {
     fn save_and_load_browsers_return_the_selected_slot() {
         let mut m = menu();
         m.down(); // Save
-        m.select(); // -> SaveBrowser
-        m.down();
-        m.down(); // slot 2
+        m.select(); // -> SaveBrowser (slot 0)
+        m.right();
+        m.right(); // slot 2
         assert_eq!(m.select(), Action::Save(2));
 
         let mut m = menu();
         m.down();
         m.down(); // Load
-        m.select(); // -> LoadBrowser
-        m.down(); // slot 1
+        m.select(); // -> LoadBrowser (slot 0)
+        m.right(); // slot 1
         assert_eq!(m.select(), Action::Load(1));
+    }
+
+    #[test]
+    fn grid_nav_moves_in_two_dimensions() {
+        let mut m = menu();
+        m.down(); // Save
+        m.select(); // -> SaveBrowser, slot 0
+        m.right();
+        m.right(); // slot 2
+        m.down(); // slot 7 (2 + GRID_COLS)
+        assert_eq!(m.select(), Action::Save(7));
+        m.up(); // back to slot 2
+        m.left(); // slot 1
+        assert_eq!(m.select(), Action::Save(1));
     }
 
     #[test]
@@ -452,7 +638,7 @@ mod tests {
     #[test]
     fn library_hidden_without_a_library() {
         // has_library=false: items are Resume,Save,Load,Speed,Mute,Quit (6).
-        let mut m = Menu::new(false, "1x".into(), false, [false; SLOTS]);
+        let mut m = Menu::new(false, "1x".into(), false, empty_slots());
         for _ in 0..10 {
             m.down(); // clamps at the last item (Quit)
         }
@@ -490,9 +676,9 @@ mod tests {
         }
         let view = MenuView {
             title: "PAUSED".into(),
-            rows: vec![Row::label("RESUME"), Row::kv("SPEED", "1X")],
             selected: 0,
             hint: "ESC BACK".into(),
+            body: Body::List(vec![Row::label("RESUME"), Row::kv("SPEED", "1X")]),
         };
         let out = compose_menu(&fb, &view);
         assert_eq!((out.width, out.height), (160, 144));
@@ -511,7 +697,7 @@ mod tests {
         for p in fb.pixels.iter_mut() {
             *p = Rgb(200, 200, 200);
         }
-        let view = Menu::new(true, "1x".into(), false, [false; SLOTS]).view();
+        let view = Menu::new(true, "1x".into(), false, empty_slots()).view();
         let out = compose_menu(&fb, &view);
         let dim = dim_px(Rgb(200, 200, 200));
         // Edge columns at mid-height stay dimmed background (panel within margins).
@@ -525,31 +711,48 @@ mod tests {
     fn compose_menu_windows_a_long_list_without_panicking() {
         let fb = FrameBuffer::new(160, 144);
         let rows: Vec<Row> = (0..SLOTS).map(|i| Row::kv(&format!("SLOT {i}"), "EMPTY")).collect();
-        let view = MenuView { title: "LOAD STATE".into(), rows, selected: 9, hint: "ESC BACK".into() };
+        let view = MenuView { title: "LOAD STATE".into(), selected: 9, hint: "ESC BACK".into(), body: Body::List(rows) };
         let out = compose_menu(&fb, &view); // selected near the end -> windowed
         assert_eq!((out.width, out.height), (160, 144));
     }
 
     #[test]
+    fn compose_menu_draws_the_browser_grid() {
+        let fb = FrameBuffer::new(1600, 900);
+        let mut slots = empty_slots();
+        slots[0] = SlotInfo {
+            filled: true,
+            age: "2m".into(),
+            thumb: Some(crate::thumb::decode(&crate::thumb::encode(&FrameBuffer::new(160, 144))).unwrap()),
+        };
+        let mut m = Menu::new(true, "1x".into(), false, slots);
+        m.down();
+        m.select(); // SaveBrowser
+        let out = compose_menu(&fb, &m.view());
+        assert_eq!((out.width, out.height), (1600, 900));
+        assert!(out.pixels.iter().any(|p| *p == BG)); // panel exists
+        assert!(out.pixels.iter().any(|p| *p == SEL_TEXT)); // selected cell border
+    }
+
+    #[test]
     fn view_reflects_screen_and_values() {
-        let mut m = Menu::new(true, "2x".into(), true, {
-            let mut s = [false; SLOTS];
-            s[3] = true;
-            s
-        });
+        let mut slots = empty_slots();
+        slots[3] = SlotInfo { filled: true, age: "2m".into(), thumb: None };
+        let mut m = Menu::new(true, "2x".into(), true, slots);
         let v = m.view();
         assert_eq!(v.title, "PAUSED");
         assert_eq!(v.selected, 0);
-        // Speed row shows "2X", Mute row shows "ON".
-        assert!(v.rows.iter().any(|r| r.label == "SPEED" && r.value == "2X"));
-        assert!(v.rows.iter().any(|r| r.label == "MUTE" && r.value == "ON"));
+        let rows = list_rows(&v);
+        assert!(rows.iter().any(|r| r.label == "SPEED" && r.value == "2X"));
+        assert!(rows.iter().any(|r| r.label == "MUTE" && r.value == "ON"));
 
         m.down(); // Save
         m.select(); // SaveBrowser
         let v = m.view();
         assert_eq!(v.title, "SAVE STATE");
-        assert_eq!(v.rows.len(), SLOTS);
-        assert_eq!(v.rows[3].value, "SAVED");
-        assert_eq!(v.rows[0].value, "EMPTY");
+        let cells = grid_cells(&v);
+        assert_eq!(cells.len(), SLOTS);
+        assert!(cells[3].filled && cells[3].age == "2m");
+        assert!(!cells[0].filled);
     }
 }

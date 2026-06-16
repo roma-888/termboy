@@ -400,7 +400,10 @@ mod tests {
     fn render_menu_emits_an_image_at_display_resolution() {
         let mut k = KittyScreen::new(160, 144);
         k.set_viewport(80, 40, Some((8, 16))); // reports cell px -> upscales
-        let view = crate::pause::Menu::new(true, "1x".into(), false, [false; crate::pause::SLOTS]).view();
+        let slots = (0..crate::pause::SLOTS)
+            .map(|_| crate::pause::SlotInfo { filled: false, age: String::new(), thumb: None })
+            .collect();
+        let view = crate::pause::Menu::new(true, "1x".into(), false, slots).view();
         let mut out = String::new();
         k.render_menu(&FrameBuffer::new(160, 144), &view, &mut out);
         assert!(out.contains("\x1b_Ga=T,f=24,o=z,"));

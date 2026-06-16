@@ -354,7 +354,10 @@ mod tests {
     fn render_menu_draws_panel_pixels() {
         let mut s = Screen::new(160, 144);
         s.set_viewport(160, 72);
-        let view = crate::pause::Menu::new(true, "1x".into(), false, [false; crate::pause::SLOTS]).view();
+        let slots = (0..crate::pause::SLOTS)
+            .map(|_| crate::pause::SlotInfo { filled: false, age: String::new(), thumb: None })
+            .collect();
+        let view = crate::pause::Menu::new(true, "1x".into(), false, slots).view();
         let mut out = String::new();
         s.render_menu(&FrameBuffer::new(160, 144), &view, &mut out);
         assert!(!out.is_empty()); // the dimmed frame + panel paint cells
