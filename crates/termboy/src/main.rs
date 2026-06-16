@@ -124,14 +124,17 @@ fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<St
 /// If `k` is a playback control, apply it and return the overlay badge to
 /// flash. `+`/`=` speed up, `-`/`_` slow down, `m` toggles audio mute. Like the
 /// save-state digits, these keys are reserved — they never reach the game.
-/// `<rom-dir>/<rom-stem>-<unix_millis><suffix>.png`, derived from the save path.
-fn capture_path(sav: &Path, suffix: &str) -> PathBuf {
+/// `<dir>/<rom-stem>-<unix_millis>.png` in the launch directory, creating `<dir>`
+/// (`images` for screenshots, `clips` for recordings) if needed. Best-effort.
+fn capture_path(sav: &Path, dir: &str) -> PathBuf {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let base = sav.with_extension(""); // strips ".sav" -> <dir>/<stem>
-    PathBuf::from(format!("{}-{}{}.png", base.display(), ts, suffix))
+    let stem = sav.file_stem().unwrap_or_default().to_string_lossy();
+    let folder = PathBuf::from(dir);
+    let _ = std::fs::create_dir_all(&folder);
+    folder.join(format!("{stem}-{ts}.png"))
 }
 
 /// `P` flags a screenshot (taken on the next frame); `R` toggles recording and
@@ -151,7 +154,7 @@ fn handle_capture_key(
         }
         'r' => Some(match recorder.take() {
             Some(rec) => {
-                let path = capture_path(sav, "-clip");
+                let path = capture_path(sav, "clips");
                 let label = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 match std::fs::write(&path, rec.finish()) {
                     Ok(()) => format!("saved clip {label}"),
@@ -978,7 +981,7 @@ fn run_game<C: Core>(
                     renderer.frame(fb.clone(), overlay.clone());
                     if screenshot_pending {
                         screenshot_pending = false;
-                        let path = capture_path(sav, "");
+                        let path = capture_path(sav, "images");
                         let label = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                         overlay = Some(match std::fs::write(&path, capture::encode_png(fb, 4)) {
                             Ok(()) => format!("saved {label}"),
@@ -995,7 +998,7 @@ fn run_game<C: Core>(
                         auto_save = rec.len() >= 600; // ~20s safety cap
                     }
                     if auto_save && let Some(rec) = recorder.take() {
-                        let path = capture_path(sav, "-clip");
+                        let path = capture_path(sav, "clips");
                         let label = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                         let _ = std::fs::write(&path, rec.finish());
                         overlay = Some(format!("saved clip {label}"));

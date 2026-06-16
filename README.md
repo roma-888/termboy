@@ -94,8 +94,8 @@ throughput -- <rom.gba>`. That completes the GBA roadmap — cycle-exact timing
 | `+` / `-` | Speed up / slow down (0.5x, 1x, 2x, 4x) |
 | M | Toggle audio mute |
 | Backspace (hold) | Rewind |
-| P | Save a screenshot (PNG, next to the ROM) |
-| R | Start/stop recording a clip (animated PNG) |
+| P | Save a screenshot (PNG → `images/`) |
+| R | Start/stop recording a clip (animated PNG → `clips/`) |
 | Esc | Quit |
 
 Save states capture the full machine and persist to `<rom>.ss0`…`<rom>.ss9`, so
@@ -118,9 +118,10 @@ Input feels best in a terminal supporting the kitty keyboard protocol
 Elsewhere termboy falls back to timed release driven by OS key repeat; for a
 snappier hold, reduce your OS key-repeat delay.
 
-**Capture:** `P` writes a PNG of the current frame next to the ROM; `R` toggles
-recording a short clip to an animated PNG (`<rom>-<time>-clip.png`). A `● REC`
-overlay shows while recording, which auto-stops after ~20 seconds.
+**Capture:** `P` writes a PNG of the current frame into `images/`; `R` toggles
+recording a short clip into `clips/` (an animated PNG). Files are named
+`<rom>-<time>.png`, and both folders are created where you launch termboy. A
+`● REC` overlay shows while recording, which auto-stops after ~20 seconds.
 
 ## Configuration
 

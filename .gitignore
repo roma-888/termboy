@@ -1,5 +1,8 @@
 /target
 .DS_Store
+# Screenshots (P) and clips (R) land here; never commit captures.
+/images/
+/clips/
 *.gb
 *.gbc
 *.sav
