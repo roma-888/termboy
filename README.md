@@ -116,6 +116,35 @@ Input feels best in a terminal supporting the kitty keyboard protocol
 Elsewhere termboy falls back to timed release driven by OS key repeat; for a
 snappier hold, reduce your OS key-repeat delay.
 
+## Configuration
+
+termboy reads optional defaults from `$XDG_CONFIG_HOME/termboy/config` (falling
+back to `~/.config/termboy/config`), or from the path given by `--config <path>`.
+It's a flat `key = value` file. A `#` starts a comment only at the **beginning of
+a line** — never inline, because hex palette values contain `#`. Any command-line
+flag overrides the matching setting, and every in-game control still works as
+usual; these are just the values a game *starts* with.
+
+```
+# ~/.config/termboy/config
+palette  = green
+keys     = a=k,b=j
+graphics = auto
+exact    = false
+speed    = 1
+mute     = false
+```
+
+- `palette` — `green`, `gray`, `pocket`, or four hex colors (`#e0f8d0,#88c070,#346856,#081820`); Game Boy only
+- `keys` — `swap`, or per-button `a=k,b=j,start=space` (same syntax as `--keys`)
+- `graphics` — `auto`, `kitty`, or `half`
+- `exact` — `true` requires a native-size terminal (no auto-scaling)
+- `speed` — starting speed: `0.5`, `1`, `2`, or `4`
+- `mute` — `true` starts with audio muted
+
+A bad value or unknown key is reported and skipped — a config typo never stops a
+game from launching.
+
 ## Display & sharpness
 
 termboy draws with half-block characters (each cell is one pixel wide and two
