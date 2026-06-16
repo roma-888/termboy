@@ -26,6 +26,14 @@ impl Playback {
         Self { speed: NORMAL, muted: false }
     }
 
+    /// Construct starting at a given speed multiplier and mute state — the config
+    /// defaults. An unrecognized multiplier falls back to `1x`. The `+`/`-`/`M`
+    /// runtime controls behave exactly as with `new()`.
+    pub fn with(multiplier: f64, muted: bool) -> Self {
+        let speed = SPEEDS.iter().position(|&s| s == multiplier).unwrap_or(NORMAL);
+        Self { speed, muted }
+    }
+
     /// Step up one preset, clamping at the fastest.
     pub fn faster(&mut self) {
         self.speed = (self.speed + 1).min(SPEEDS.len() - 1);
@@ -200,5 +208,16 @@ mod tests {
         assert_eq!(p.mute_label(), "unmuted");
         p.toggle_mute();
         assert_eq!(p.mute_label(), "muted");
+    }
+
+    #[test]
+    fn with_starts_at_given_speed_and_mute() {
+        let p = Playback::with(2.0, true);
+        assert_eq!(p.multiplier(), 2.0);
+        assert!(p.is_muted());
+        // An unknown multiplier falls back to 1x.
+        let p = Playback::with(3.0, false);
+        assert_eq!(p.multiplier(), 1.0);
+        assert!(!p.is_muted());
     }
 }
