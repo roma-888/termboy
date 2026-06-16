@@ -14,6 +14,17 @@ pub const SLOTS: usize = 10;
 /// Columns in the save/load thumbnail grid (10 slots -> 5x2).
 pub const GRID_COLS: usize = 5;
 
+/// Slot number shown at grid position `pos`, ordered like the keyboard number
+/// row: positions 0..8 are slots 1..9 and the last position is slot 0 — so the
+/// grid reads `1 2 3 4 5 / 6 7 8 9 0`, matching the `1`-`0` save keys.
+fn slot_at(pos: usize) -> usize {
+    if pos + 1 < SLOTS {
+        pos + 1
+    } else {
+        0
+    }
+}
+
 /// Compact "time ago" for a slot's save file, from seconds elapsed.
 pub fn age_label(secs: u64) -> String {
     if secs < 60 {
@@ -182,8 +193,8 @@ impl Menu {
                 MainItem::Library => Action::Library,
                 MainItem::Quit => Action::Quit,
             },
-            Screen::SaveBrowser => Action::Save(self.slot_sel),
-            Screen::LoadBrowser => Action::Load(self.slot_sel),
+            Screen::SaveBrowser => Action::Save(slot_at(self.slot_sel)),
+            Screen::LoadBrowser => Action::Load(slot_at(self.slot_sel)),
         }
     }
 
@@ -240,11 +251,14 @@ impl Menu {
             }
             Screen::SaveBrowser | Screen::LoadBrowser => {
                 let cells = (0..SLOTS)
-                    .map(|i| Cell {
-                        num: format!("{i}"),
-                        age: self.slots[i].age.clone(),
-                        filled: self.slots[i].filled,
-                        thumb: self.slots[i].thumb.clone(),
+                    .map(|pos| {
+                        let s = slot_at(pos);
+                        Cell {
+                            num: format!("{s}"),
+                            age: self.slots[s].age.clone(),
+                            filled: self.slots[s].filled,
+                            thumb: self.slots[s].thumb.clone(),
+                        }
                     })
                     .collect();
                 let title = if self.screen == Screen::SaveBrowser { "SAVE STATE" } else { "LOAD STATE" };
@@ -594,33 +608,52 @@ mod tests {
 
     #[test]
     fn save_and_load_browsers_return_the_selected_slot() {
+        // Positions map to slots 1,2,3,4,5 / 6,7,8,9,0.
         let mut m = menu();
         m.down(); // Save
-        m.select(); // -> SaveBrowser (slot 0)
+        m.select(); // -> SaveBrowser (pos 0 = slot 1)
         m.right();
-        m.right(); // slot 2
-        assert_eq!(m.select(), Action::Save(2));
+        m.right(); // pos 2 = slot 3
+        assert_eq!(m.select(), Action::Save(3));
 
         let mut m = menu();
         m.down();
         m.down(); // Load
-        m.select(); // -> LoadBrowser (slot 0)
-        m.right(); // slot 1
-        assert_eq!(m.select(), Action::Load(1));
+        m.select(); // -> LoadBrowser (pos 0 = slot 1)
+        m.right(); // pos 1 = slot 2
+        assert_eq!(m.select(), Action::Load(2));
     }
 
     #[test]
     fn grid_nav_moves_in_two_dimensions() {
         let mut m = menu();
         m.down(); // Save
-        m.select(); // -> SaveBrowser, slot 0
+        m.select(); // -> SaveBrowser, pos 0 (slot 1)
         m.right();
-        m.right(); // slot 2
-        m.down(); // slot 7 (2 + GRID_COLS)
-        assert_eq!(m.select(), Action::Save(7));
-        m.up(); // back to slot 2
-        m.left(); // slot 1
-        assert_eq!(m.select(), Action::Save(1));
+        m.right(); // pos 2 (slot 3)
+        m.down(); // pos 7 (slot 8)
+        assert_eq!(m.select(), Action::Save(8));
+        m.up(); // pos 2 (slot 3)
+        m.left(); // pos 1 (slot 2)
+        assert_eq!(m.select(), Action::Save(2));
+    }
+
+    #[test]
+    fn grid_orders_slot_zero_last() {
+        let mut m = menu();
+        m.down(); // Save
+        m.select(); // SaveBrowser
+        let v = m.view();
+        let cells = grid_cells(&v);
+        assert_eq!(cells[0].num, "1"); // first cell is slot 1
+        assert_eq!(cells[SLOTS - 1].num, "0"); // last cell is slot 0
+        drop(v);
+        // Navigating to the last cell saves slot 0.
+        m.down(); // pos 5
+        for _ in 0..4 {
+            m.right(); // pos 9
+        }
+        assert_eq!(m.select(), Action::Save(0));
     }
 
     #[test]
@@ -752,7 +785,9 @@ mod tests {
         assert_eq!(v.title, "SAVE STATE");
         let cells = grid_cells(&v);
         assert_eq!(cells.len(), SLOTS);
-        assert!(cells[3].filled && cells[3].age == "2m");
-        assert!(!cells[0].filled);
+        // Slot 3 is filled; it renders at grid position 2 (slots 1,2,3,...).
+        assert_eq!(cells[2].num, "3");
+        assert!(cells[2].filled && cells[2].age == "2m");
+        assert!(!cells[0].filled); // position 0 = slot 1, empty
     }
 }
