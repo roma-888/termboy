@@ -4,6 +4,7 @@
 //! `--headless` runs without UI and streams serial output (debug tool).
 
 mod audio;
+mod capture;
 mod config;
 mod input;
 mod kitty;
