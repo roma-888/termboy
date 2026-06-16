@@ -62,6 +62,10 @@ pub trait Core {
     fn set_audio_rate(&mut self, hz: u32) {
         let _ = hz;
     }
+    /// Enable/disable color correction. GBA-only; default no-op.
+    fn set_color_correction(&mut self, on: bool) {
+        let _ = on;
+    }
     /// Serialize full machine state (see [`state`]). Default: unsupported.
     fn save_state(&self) -> Vec<u8> {
         Vec::new()

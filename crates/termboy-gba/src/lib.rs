@@ -16,7 +16,7 @@ pub mod timers;
 pub mod timing;
 
 use termboy_core::state::{Reader, StateError, Writer};
-use termboy_core::{Buttons, Core, FrameBuffer};
+use termboy_core::{Buttons, Core, FrameBuffer, Rgb};
 
 use crate::bus::Bus;
 use crate::cpu::Cpu;
@@ -32,6 +32,7 @@ pub struct GbaCore {
     cpu: Cpu,
     frame: FrameBuffer,
     rom_id: u64,
+    correction: Option<Box<[Rgb; 32768]>>,
 }
 
 impl GbaCore {
@@ -44,6 +45,7 @@ impl GbaCore {
             cpu: Cpu::new(Bus::new(rom)),
             frame: FrameBuffer::new(ppu::WIDTH, ppu::HEIGHT),
             rom_id,
+            correction: None,
         })
     }
 
@@ -91,8 +93,14 @@ impl Core for GbaCore {
         while !self.cpu.bus.ppu.frame_ready && self.cpu.bus.cycles < cap {
             self.cpu.step_system();
         }
-        for (i, &c) in self.cpu.bus.ppu.frame.iter().enumerate() {
-            self.frame.pixels[i] = ppu::bgr555_to_rgb(c);
+        if let Some(lut) = self.correction.as_deref() {
+            for (i, &c) in self.cpu.bus.ppu.frame.iter().enumerate() {
+                self.frame.pixels[i] = lut[(c & 0x7FFF) as usize];
+            }
+        } else {
+            for (i, &c) in self.cpu.bus.ppu.frame.iter().enumerate() {
+                self.frame.pixels[i] = ppu::bgr555_to_rgb(c);
+            }
         }
         &self.frame
     }
@@ -111,6 +119,10 @@ impl Core for GbaCore {
 
     fn set_audio_rate(&mut self, hz: u32) {
         self.cpu.bus.apu.set_sample_rate(hz);
+    }
+
+    fn set_color_correction(&mut self, on: bool) {
+        self.correction = on.then(crate::color::build_lut);
     }
 
     fn save_state(&self) -> Vec<u8> {
@@ -138,5 +150,45 @@ impl Core for GbaCore {
             return Err(StateError::WrongRom);
         }
         self.cpu.deserialize(&mut r)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color;
+
+    /// ROM whose entry instruction is `b .` (0xEAFFFFFE), so the CPU spins
+    /// forever without touching display registers — lets us pin a rendered
+    /// backdrop deterministically.
+    fn spinning_core() -> GbaCore {
+        let mut rom = vec![0u8; 0xC0];
+        rom[0..4].copy_from_slice(&0xEAFF_FFFEu32.to_le_bytes());
+        GbaCore::new(rom).unwrap()
+    }
+
+    #[test]
+    fn set_color_correction_toggles_the_lut() {
+        let mut core = spinning_core();
+        assert!(core.correction.is_none());
+        core.set_color_correction(true);
+        assert!(core.correction.is_some());
+        core.set_color_correction(false);
+        assert!(core.correction.is_none());
+    }
+
+    #[test]
+    fn run_frame_applies_correction_to_the_backdrop() {
+        let mut core = spinning_core();
+        core.debug_write16(0x0400_0000, 0x0000); // DISPCNT: no forced blank, no layers
+        core.debug_write16(0x0500_0000, 0x001F); // backdrop palette[0] = red
+
+        let raw = core.run_frame(Buttons::default()).pixels[0];
+        assert_eq!(raw, ppu::bgr555_to_rgb(0x001F)); // raw expand of red
+
+        core.set_color_correction(true);
+        let corrected = core.run_frame(Buttons::default()).pixels[0];
+        assert_eq!(corrected, color::correct(0x001F));
+        assert_ne!(corrected, raw);
     }
 }
