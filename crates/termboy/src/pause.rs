@@ -322,14 +322,24 @@ const BORDER: &str = "\x1b[38;2;92;98;124m"; // dialog frame
 const PAD: usize = 2;
 const GAP: usize = 2;
 /// Preview pane size (cells) on the Save/Load screens.
-const PREVIEW_COLS: usize = 26;
-const PREVIEW_ROWS: usize = 11;
+const PREVIEW_COLS: usize = 30;
+const PREVIEW_ROWS: usize = 13;
+
+/// Where the selected-slot preview goes: a cell rectangle (1-based `col`/`row`)
+/// the renderer fills — a kitty image on graphics terminals, half-blocks else.
+#[derive(Clone, Copy)]
+pub struct PreviewRect {
+    pub col: usize,
+    pub row: usize,
+    pub cols: usize,
+    pub rows: usize,
+}
 
 /// Render the menu as a centered bordered dialog: a title, a windowed row list
-/// (selected row a full-width reverse-video bar when `selectable`), a dim hint,
-/// and — on Save/Load — a half-block preview of the selected slot inside the same
-/// frame, to the right of the list.
-pub fn render(view: &MenuView, cols: usize, rows: usize) -> String {
+/// (selected row a full-width reverse-video bar when `selectable`), a dim hint.
+/// On Save/Load it reserves a preview pane and returns its cell rectangle; the
+/// renderer fills it (a crisp kitty image, or half-blocks via `preview_lines`).
+pub fn render(view: &MenuView, cols: usize, rows: usize) -> (String, Option<PreviewRect>) {
     use std::fmt::Write as _;
     let cols = cols.max(30);
     let rows = rows.max(12);
@@ -399,21 +409,21 @@ pub fn render(view: &MenuView, cols: usize, rows: usize) -> String {
     let hcol = inner_left + inner_w.saturating_sub(chars(&view.hint)) / 2;
     let _ = write!(out, "\x1b[{hrow};{hcol}H{DIM}{}{RESET}", view.hint);
 
-    // Preview, aligned with the first row.
-    if let Some(t) = &view.preview {
-        let pcol = inner_left + list_col + GAP;
-        for (i, line) in thumb_cells(t, PREVIEW_COLS, PREVIEW_ROWS).iter().enumerate() {
-            let _ = write!(out, "\x1b[{};{pcol}H{line}{RESET}", row0 + i);
-        }
-    }
+    // The preview pane (filled by the renderer), aligned with the first row.
+    let rect = view.preview.as_ref().map(|_| PreviewRect {
+        col: inner_left + list_col + GAP,
+        row: row0,
+        cols: PREVIEW_COLS,
+        rows: PREVIEW_ROWS,
+    });
 
-    out
+    (out, rect)
 }
 
 /// Half-block cell lines (no cursor positioning) rendering `t` into a
 /// `box_cols` x `box_rows` cell region (each cell = 1x2 px), aspect-preserved and
-/// centered on a dark backdrop.
-fn thumb_cells(t: &Thumb, box_cols: usize, box_rows: usize) -> Vec<String> {
+/// centered on a dark backdrop. The non-graphics renderer's preview fallback.
+pub fn preview_lines(t: &Thumb, box_cols: usize, box_rows: usize) -> Vec<String> {
     use std::fmt::Write as _;
     let bg = Rgb(16, 18, 26);
     if t.width == 0 || t.height == 0 {
@@ -606,12 +616,13 @@ mod tests {
 
     #[test]
     fn render_draws_title_rows_and_selection() {
-        let s = render(&menu().view(), 80, 24);
+        let (s, rect) = render(&menu().view(), 80, 24);
         assert!(s.starts_with("\x1b[0m\x1b[2J\x1b[H"));
         assert!(s.contains("PAUSED"));
         assert!(s.contains("Resume"));
         assert!(s.contains(REV)); // selectable -> selected row highlighted
         assert!(s.contains('┌') && s.contains('┘')); // bordered dialog
+        assert!(rect.is_none()); // no preview on the main screen
     }
 
     #[test]
@@ -622,13 +633,13 @@ mod tests {
             m.down();
         }
         m.select(); // Controls
-        let s = render(&m.view(), 80, 24);
+        let (s, _) = render(&m.view(), 80, 24);
         assert!(s.contains("CONTROLS"));
         assert!(!s.contains(REV)); // reference screen: no highlight
     }
 
     #[test]
-    fn render_save_screen_includes_a_preview_when_slot_filled() {
+    fn render_save_screen_returns_a_preview_rect_when_slot_filled() {
         let mut slots = empty_slots();
         slots[1] = SlotInfo {
             filled: true,
@@ -640,9 +651,14 @@ mod tests {
         m.select(); // SaveBrowser, pos 0 = slot 1 (filled) -> preview Some
         let v = m.view();
         assert!(v.preview.is_some());
-        let s = render(&v, 100, 30);
+        let (s, rect) = render(&v, 100, 30);
         assert!(s.contains("Slot 1"));
-        assert!(s.contains('\u{2580}')); // half-block preview cell
+        let rect = rect.unwrap();
+        assert_eq!((rect.cols, rect.rows), (PREVIEW_COLS, PREVIEW_ROWS));
+        // The half-block fallback renders the thumb as upper-half-block cells.
+        let lines = preview_lines(v.preview.as_ref().unwrap(), rect.cols, rect.rows);
+        assert_eq!(lines.len(), PREVIEW_ROWS);
+        assert!(lines[0].contains('\u{2580}'));
     }
 }
 

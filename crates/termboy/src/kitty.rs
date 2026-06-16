@@ -157,6 +157,9 @@ pub struct KittyScreen {
     /// image maps 1:1 and stays crisp. `None` when the terminal didn't report a
     /// cell size — then we send the native frame and let it scale (softer).
     target: Option<(usize, usize)>,
+    /// Terminal pixels-per-cell (width, height), used to size the crisp pause-menu
+    /// preview image. `None` until the terminal reports it.
+    cell_px: Option<(usize, usize)>,
     overlay: Option<String>,
 }
 
@@ -170,6 +173,7 @@ impl KittyScreen {
             off_c: 0,
             off_r: 0,
             target: None,
+            cell_px: None,
             overlay: None,
         }
     }
@@ -193,6 +197,7 @@ impl KittyScreen {
         self.off_c = oc;
         self.off_r = or;
         self.target = cell_px.map(|(cw, ch)| (c * cw, r * ch));
+        self.cell_px = cell_px;
     }
 
     /// No-op: every render re-emits the full image, so there's nothing to forget.
@@ -223,6 +228,42 @@ impl KittyScreen {
             None => nearest_upscale(fb, tw, th),
         };
         encode_image(&rgb, tw, th, IMAGE_ID, self.cols, self.rows, out);
+    }
+
+    /// Place the save/load preview as a crisp image filling the cell rectangle
+    /// `rect`: nearest-upscale the thumbnail (aspect-fit, letterboxed) to the
+    /// rectangle's pixel size, then transmit it at `rect`. Reuses `IMAGE_ID`, so
+    /// the next game frame on resume reclaims it.
+    pub fn place_preview(&self, t: &crate::thumb::Thumb, rect: crate::pause::PreviewRect, out: &mut String) {
+        use std::fmt::Write;
+        let (cw, ch) = self.cell_px.unwrap_or((8, 16));
+        let (tw, th) = (rect.cols * cw, rect.rows * ch);
+        if tw == 0 || th == 0 {
+            return;
+        }
+        // Letterbox the thumbnail into (tw, th) on a dark backdrop, nearest.
+        let mut rgb = vec![0u8; tw * th * 3];
+        for px in rgb.chunks_exact_mut(3) {
+            px.copy_from_slice(&[16, 18, 26]);
+        }
+        if t.width > 0 && t.height > 0 {
+            let s = (tw * 1000 / t.width).min(th * 1000 / t.height).max(1);
+            let dw = (t.width * s / 1000).clamp(1, tw);
+            let dh = (t.height * s / 1000).clamp(1, th);
+            let (ox, oy) = ((tw - dw) / 2, (th - dh) / 2);
+            for dy in 0..dh {
+                let sy = dy * t.height / dh;
+                for dx in 0..dw {
+                    let p = t.pixels[sy * t.width + dx * t.width / dw];
+                    let o = ((oy + dy) * tw + ox + dx) * 3;
+                    rgb[o] = p.0;
+                    rgb[o + 1] = p.1;
+                    rgb[o + 2] = p.2;
+                }
+            }
+        }
+        write!(out, "\x1b[{};{}H", rect.row, rect.col).unwrap();
+        encode_image(&rgb, tw, th, IMAGE_ID, rect.cols as u16, rect.rows as u16, out);
     }
 }
 
@@ -361,6 +402,19 @@ mod tests {
         assert!(out.starts_with("\x1b[6;1H"), "cursor not at centered offset: {out:?}");
         assert!(out.contains("\x1b_Ga=T,f=24,o=z,s=4,v=4,"));
         assert!(out.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn place_preview_emits_an_image_at_the_rect() {
+        let mut k = KittyScreen::new(160, 144);
+        k.set_viewport(80, 40, Some((8, 16))); // reports cell px
+        let thumb = crate::thumb::decode(&crate::thumb::encode(&FrameBuffer::new(160, 144))).unwrap();
+        let rect = crate::pause::PreviewRect { col: 30, row: 5, cols: 30, rows: 13 };
+        let mut out = String::new();
+        k.place_preview(&thumb, rect, &mut out);
+        assert!(out.starts_with("\x1b[5;30H")); // positioned at the rect
+        assert!(out.contains("\x1b_Ga=T,f=24,o=z,")); // a transmit-and-display image
+        assert!(out.contains("c=30,r=13,")); // sized to the rect's cells
     }
 
     #[test]

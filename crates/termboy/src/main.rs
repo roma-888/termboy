@@ -423,14 +423,29 @@ impl Display {
     }
 
     /// Draw the pause menu as a full-screen terminal-text screen. The text is
-    /// renderer-independent; the kitty path first removes the game image so it
-    /// doesn't show through, and the half-block path drops its stale diff state.
+    /// renderer-independent; the Save/Load preview is filled per renderer — a
+    /// crisp kitty image on graphics terminals, half-blocks elsewhere.
     fn render_menu(&mut self, view: &pause::MenuView, cols: usize, rows: usize, out: &mut String) {
+        use std::fmt::Write as _;
+        let (text, rect) = pause::render(view, cols, rows);
         match self {
-            Display::Half(s) => s.invalidate(),
-            Display::Kitty(_) => out.push_str("\x1b_Ga=d,d=A\x1b\\"),
+            Display::Half(s) => {
+                s.invalidate(); // diff state is stale after raw text
+                out.push_str(&text);
+                if let (Some(r), Some(t)) = (rect, &view.preview) {
+                    for (i, line) in pause::preview_lines(t, r.cols, r.rows).iter().enumerate() {
+                        let _ = write!(out, "\x1b[{};{}H{line}\x1b[0m", r.row + i, r.col);
+                    }
+                }
+            }
+            Display::Kitty(k) => {
+                out.push_str("\x1b_Ga=d,d=A\x1b\\"); // remove the game image
+                out.push_str(&text);
+                if let (Some(r), Some(t)) = (rect, &view.preview) {
+                    k.place_preview(t, r, out);
+                }
+            }
         }
-        out.push_str(&pause::render(view, cols, rows));
     }
 
     /// On exit, free any transmitted image so it doesn't linger in the terminal.

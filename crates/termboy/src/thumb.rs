@@ -7,9 +7,10 @@ use termboy_core::{FrameBuffer, Rgb};
 
 const MAGIC: &[u8; 4] = b"TBTH";
 
-/// Target thumbnail width in pixels; height follows by the integer downscale
-/// factor (GB 160->80, GBA 240->80).
-pub const TARGET_W: usize = 96;
+/// Max thumbnail width before downscaling kicks in. Set above the GBA's 240 so
+/// GB/GBA frames are stored at full native resolution (sharp source for the
+/// crisp save/load preview); only larger frames (none today) would shrink.
+pub const TARGET_W: usize = 240;
 
 /// A decoded thumbnail. `pixels` is row-major `width`x`height` RGB.
 #[derive(Clone)]
@@ -87,10 +88,17 @@ mod tests {
     }
 
     #[test]
-    fn downscales_wide_frames_toward_target_width() {
-        let fb = FrameBuffer::new(192, 128); // den = ceil(192/96) = 2 -> 96x64
+    fn stores_native_frames_full_res() {
+        // GB and GBA frames are <= TARGET_W, so they're stored unscaled.
+        assert_eq!((decode(&encode(&FrameBuffer::new(160, 144))).unwrap().width), 160);
+        assert_eq!((decode(&encode(&FrameBuffer::new(240, 160))).unwrap().width), 240);
+    }
+
+    #[test]
+    fn downscales_only_above_target_width() {
+        let fb = FrameBuffer::new(720, 480); // den = ceil(720/240) = 3 -> 240x160
         let t = decode(&encode(&fb)).unwrap();
-        assert_eq!((t.width, t.height), (96, 64));
+        assert_eq!((t.width, t.height), (240, 160));
     }
 
     #[test]
