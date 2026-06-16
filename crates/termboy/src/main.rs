@@ -38,6 +38,7 @@ options:
   --graphics <mode>  auto (default), kitty (force image protocol), or half (force
                      half-blocks). auto uses kitty graphics on Ghostty/kitty/WezTerm
   --keys <spec>      'swap' (A/B swapped) or per-button: 'a=k,b=j,start=space'
+  --config <path>    use this file instead of ~/.config/termboy/config
   --headless         run without UI, print serial output (debug tool)
   -h, --help         show this help
 
@@ -448,9 +449,12 @@ fn main() -> ExitCode {
     }
     let headless = args.iter().any(|a| a == "--headless");
     let exact = args.iter().any(|a| a == "--exact");
-    let mut palette = DMG_GREEN;
-    let mut keymap = input::default_keymap();
-    let mut graphics = GraphicsPref::Auto;
+    // Defaults < config file < CLI flags.
+    let mut settings = config::Settings::default();
+    if let Some(path) = config_path_arg(&args).or_else(config::default_path) {
+        config::load(&path, &mut settings);
+    }
+
     let mut rom_arg: Option<&str> = None;
     let mut it = args.iter().peekable();
     while let Some(arg) = it.next() {
@@ -466,43 +470,29 @@ fn main() -> ExitCode {
             ("graphics", Some(n.to_string()))
         } else if arg == "--graphics" {
             ("graphics", it.next().cloned())
+        } else if arg == "--config" {
+            it.next(); // path already consumed by config_path_arg
+            ("", None)
+        } else if arg.strip_prefix("--config=").is_some() {
+            ("", None)
         } else {
             if !arg.starts_with('-') {
                 rom_arg = Some(arg);
             }
             ("", None)
         };
-        match (flag, value) {
-            ("palette", Some(name)) => match parse_palette(&name) {
-                Some(p) => palette = p,
-                None => {
-                    eprintln!(
-                        "error: unknown palette {name:?} — try green, gray, pocket, \
-                         or four hex colors like '#e0f8d0,#88c070,#346856,#081820'"
-                    );
+        if !flag.is_empty() {
+            if let Some(v) = value {
+                if let Err(e) = config::apply_setting(&mut settings, flag, &v) {
+                    eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
-            },
-            ("keys", Some(spec)) => match input::parse_keys(&spec) {
-                Some(m) => keymap = m,
-                None => {
-                    eprintln!("error: bad --keys spec {spec:?} — try 'swap' or 'a=k,b=j,start=space'");
-                    return ExitCode::FAILURE;
-                }
-            },
-            ("graphics", Some(mode)) => match mode.as_str() {
-                "auto" => graphics = GraphicsPref::Auto,
-                "kitty" => graphics = GraphicsPref::Kitty,
-                "half" => graphics = GraphicsPref::Half,
-                other => {
-                    eprintln!("error: --graphics must be auto, kitty, or half (got {other:?})");
-                    return ExitCode::FAILURE;
-                }
-            },
-            _ => {}
+            }
         }
     }
-    let use_kitty = graphics.use_kitty();
+    if exact {
+        settings.exact = true;
+    }
     match rom_arg {
         Some(path) if is_gba(path) => {
             if headless {
@@ -510,7 +500,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             match load_gba(path) {
-                Ok(core) => run_terminal(core, 240, 160, exact, &sav_path(path), keymap, use_kitty),
+                Ok(core) => run_terminal(core, 240, 160, &sav_path(path), &settings),
                 Err(msg) => {
                     eprintln!("error: {msg}");
                     ExitCode::FAILURE
@@ -518,7 +508,7 @@ fn main() -> ExitCode {
             }
         }
         Some(path) => {
-            let (gb, sav) = match load_game(path, palette) {
+            let (gb, sav) = match load_game(path, settings.palette) {
                 Ok(pair) => pair,
                 Err(msg) => {
                     eprintln!("error: {msg}");
@@ -528,14 +518,14 @@ fn main() -> ExitCode {
             if headless {
                 run_headless(gb, &sav)
             } else {
-                run_terminal(gb, 160, 144, exact, &sav, keymap, use_kitty)
+                run_terminal(gb, 160, 144, &sav, &settings)
             }
         }
         None if headless => {
             eprintln!("{USAGE}");
             ExitCode::FAILURE
         }
-        None => run_menu(palette, exact, keymap, use_kitty),
+        None => run_menu(&settings),
     }
 }
 
@@ -548,6 +538,20 @@ fn cell_pixels() -> Option<(usize, usize)> {
         return None;
     }
     Some((ws.width as usize / ws.columns as usize, ws.height as usize / ws.rows as usize))
+}
+
+/// First `--config <path>` / `--config=<path>` on the command line, if any.
+fn config_path_arg(args: &[String]) -> Option<PathBuf> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if let Some(p) = a.strip_prefix("--config=") {
+            return Some(PathBuf::from(p));
+        }
+        if a == "--config" {
+            return it.next().map(PathBuf::from);
+        }
+    }
+    None
 }
 
 fn is_gba(path: &str) -> bool {
@@ -578,12 +582,7 @@ fn load_game(path: &str, palette: [Rgb; 4]) -> Result<(GameBoy, PathBuf), String
 }
 
 /// No-arg mode: one terminal session hosting picker -> game -> picker.
-fn run_menu(
-    palette: [Rgb; 4],
-    exact: bool,
-    keymap: std::collections::HashMap<crossterm::event::KeyCode, termboy_core::Buttons>,
-    use_kitty: bool,
-) -> ExitCode {
+fn run_menu(settings: &config::Settings) -> ExitCode {
     let rom_dir = if Path::new("roms").is_dir() { Path::new("roms") } else { Path::new(".") };
     let roms = menu::scan_roms(rom_dir);
     if roms.is_empty() {
@@ -599,6 +598,7 @@ fn run_menu(
         }
     };
     let audio = audio::Audio::new();
+    let use_kitty = settings.graphics.use_kitty();
     loop {
         let Some(i) = menu::pick(&roms) else {
             return ExitCode::SUCCESS;
@@ -607,27 +607,31 @@ fn run_menu(
         let launch_err = if roms[i].kind == menu::Kind::Advance {
             match load_gba(&path) {
                 Ok(core) => {
-                    let mut input = input::Input::new(guard.enhanced, keymap.clone());
+                    let mut input = input::Input::new(guard.enhanced, settings.keymap.clone());
                     let screen = Display::new(use_kitty, 240, 160);
                     print!("\x1b[0m\x1b[2J");
                     let sav = sav_path(&path);
                     let audio = &audio; // keep the move closure from consuming it
+                    let exact = settings.exact;
+                    let playback = playback::Playback::with(settings.speed, settings.muted);
                     catch_game_panic(move || {
-                        run_game(core, exact, &sav, &mut input, screen, audio);
+                        run_game(core, exact, &sav, &mut input, screen, audio, playback);
                         // Esc in-game returns here: back to the picker.
                     })
                 }
                 Err(msg) => Some(msg),
             }
         } else {
-            match load_game(&path, palette) {
+            match load_game(&path, settings.palette) {
                 Ok((gb, sav)) => {
-                    let mut input = input::Input::new(guard.enhanced, keymap.clone());
+                    let mut input = input::Input::new(guard.enhanced, settings.keymap.clone());
                     let screen = Display::new(use_kitty, 160, 144);
                     print!("\x1b[0m\x1b[2J");
                     let audio = &audio;
+                    let exact = settings.exact;
+                    let playback = playback::Playback::with(settings.speed, settings.muted);
                     catch_game_panic(move || {
-                        run_game(gb, exact, &sav, &mut input, screen, audio);
+                        run_game(gb, exact, &sav, &mut input, screen, audio, playback);
                     })
                 }
                 Err(msg) => Some(msg),
@@ -759,10 +763,8 @@ fn run_terminal<C: Core>(
     core: C,
     width: usize,
     height: usize,
-    exact: bool,
     sav: &Path,
-    keymap: std::collections::HashMap<crossterm::event::KeyCode, termboy_core::Buttons>,
-    use_kitty: bool,
+    settings: &config::Settings,
 ) -> ExitCode {
     install_panic_hook();
     let guard = match TerminalGuard::enter() {
@@ -772,10 +774,11 @@ fn run_terminal<C: Core>(
             return ExitCode::FAILURE;
         }
     };
-    let mut input = input::Input::new(guard.enhanced, keymap);
-    let screen = Display::new(use_kitty, width, height);
+    let mut input = input::Input::new(guard.enhanced, settings.keymap.clone());
+    let screen = Display::new(settings.graphics.use_kitty(), width, height);
     let audio = audio::Audio::new();
-    run_game(core, exact, sav, &mut input, screen, &audio)
+    let playback = playback::Playback::with(settings.speed, settings.muted);
+    run_game(core, settings.exact, sav, &mut input, screen, &audio, playback)
 }
 
 /// Run one game until Esc. Assumes raw mode + alternate screen are active.
@@ -791,6 +794,7 @@ fn run_game<C: Core>(
     input: &mut input::Input,
     screen: Display,
     audio: &audio::Audio,
+    mut playback: playback::Playback,
 ) -> ExitCode {
     core.set_audio_rate(audio.sample_rate);
     let mut audio_buf: Vec<(f32, f32)> = Vec::new();
@@ -809,7 +813,6 @@ fn run_game<C: Core>(
     // the overlay travels with the frame rather than being set on it directly.
     let mut overlay: Option<String> = None;
     let mut overlay_until = Instant::now();
-    let mut playback = playback::Playback::new();
     let mut rewind = rewind::Rewind::new();
     let mut rewind_key = input::HoldKey::new(input.enhanced());
     let mut rewind_tick: u32 = 0;
