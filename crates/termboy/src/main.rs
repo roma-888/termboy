@@ -641,6 +641,12 @@ fn load_game(path: &str, palette: [Rgb; 4]) -> Result<(GameBoy, PathBuf), String
 }
 
 /// No-arg mode: one terminal session hosting picker -> game -> picker.
+/// How a game session ended: back to the picker, or quit the app.
+enum GameExit {
+    Library,
+    Quit,
+}
+
 fn run_menu(settings: &config::Settings) -> ExitCode {
     let rom_dir = if Path::new("roms").is_dir() { Path::new("roms") } else { Path::new(".") };
     let roms = menu::scan_roms(rom_dir);
@@ -663,7 +669,7 @@ fn run_menu(settings: &config::Settings) -> ExitCode {
             return ExitCode::SUCCESS;
         };
         let path = roms[i].path.to_string_lossy().into_owned();
-        let launch_err = if roms[i].kind == menu::Kind::Advance {
+        let outcome: Result<GameExit, String> = if roms[i].kind == menu::Kind::Advance {
             match load_gba(&path) {
                 Ok(mut core) => {
                     core.set_color_correction(settings.color_correct);
@@ -675,11 +681,10 @@ fn run_menu(settings: &config::Settings) -> ExitCode {
                     let exact = settings.exact;
                     let playback = playback::Playback::with(settings.speed, settings.muted);
                     catch_game_panic(move || {
-                        run_game(core, exact, &sav, &mut input, screen, audio, playback);
-                        // Esc in-game returns here: back to the picker.
+                        run_game(core, exact, &sav, &mut input, screen, audio, playback, true)
                     })
                 }
-                Err(msg) => Some(msg),
+                Err(msg) => Err(msg),
             }
         } else {
             match load_game(&path, settings.palette) {
@@ -692,20 +697,24 @@ fn run_menu(settings: &config::Settings) -> ExitCode {
                     let exact = settings.exact;
                     let playback = playback::Playback::with(settings.speed, settings.muted);
                     catch_game_panic(move || {
-                        run_game(gb, exact, &sav, &mut input, screen, audio, playback);
+                        run_game(gb, exact, &sav, &mut input, screen, audio, playback, true)
                     })
                 }
-                Err(msg) => Some(msg),
+                Err(msg) => Err(msg),
             }
         };
-        if let Some(msg) = launch_err {
-            // the panic hook may have left raw mode + the alternate screen;
-            // restore both before showing the error in the picker session
-            let _ = terminal::enable_raw_mode();
-            print!("\x1b[?1049h\x1b[0m\x1b[2J\x1b[Herror: {msg}\r\n\r\npress any key");
-            use std::io::Write as _;
-            std::io::stdout().flush().ok();
-            let _ = event::read();
+        match outcome {
+            Ok(GameExit::Library) => {} // loop re-shows the picker
+            Ok(GameExit::Quit) => return ExitCode::SUCCESS,
+            Err(msg) => {
+                // the panic hook may have left raw mode + the alternate screen;
+                // restore both before showing the error in the picker session
+                let _ = terminal::enable_raw_mode();
+                print!("\x1b[?1049h\x1b[0m\x1b[2J\x1b[Herror: {msg}\r\n\r\npress any key");
+                use std::io::Write as _;
+                std::io::stdout().flush().ok();
+                let _ = event::read();
+            }
         }
     }
 }
@@ -713,16 +722,16 @@ fn run_menu(settings: &config::Settings) -> ExitCode {
 /// Run a game, converting a core panic into a picker-visible message
 /// instead of killing the whole app (GBA cores hit loud unimplemented!
 /// seams until G4 fills them in).
-fn catch_game_panic(f: impl FnOnce()) -> Option<String> {
+fn catch_game_panic<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-        Ok(()) => None,
+        Ok(v) => Ok(v),
         Err(e) => {
             let detail = e
                 .downcast_ref::<String>()
                 .map(String::as_str)
                 .or_else(|| e.downcast_ref::<&str>().copied())
                 .unwrap_or("unknown panic");
-            Some(format!("this game needs a later milestone: {detail}"))
+            Err(format!("this game needs a later milestone: {detail}"))
         }
     }
 }
@@ -840,7 +849,9 @@ fn run_terminal<C: Core>(
     let audio = audio::Audio::new();
     core.set_color_correction(settings.color_correct);
     let playback = playback::Playback::with(settings.speed, settings.muted);
-    run_game(core, settings.exact, sav, &mut input, screen, &audio, playback)
+    match run_game(core, settings.exact, sav, &mut input, screen, &audio, playback, false) {
+        GameExit::Library | GameExit::Quit => ExitCode::SUCCESS,
+    }
 }
 
 /// Run one game until Esc. Assumes raw mode + alternate screen are active.
@@ -857,7 +868,8 @@ fn run_game<C: Core>(
     screen: Display,
     audio: &audio::Audio,
     mut playback: playback::Playback,
-) -> ExitCode {
+    has_library: bool,
+) -> GameExit {
     core.set_audio_rate(audio.sample_rate);
     let mut audio_buf: Vec<(f32, f32)> = Vec::new();
     let (need_cols, need_rows) = screen.required_size();
@@ -894,7 +906,7 @@ fn run_game<C: Core>(
                 }
                 Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => {
                     if k.code == KeyCode::Esc {
-                        break 'game ExitCode::SUCCESS;
+                        break 'game GameExit::Quit;
                     }
                     if let Some(msg) = handle_capture_key(&k, &mut screenshot_pending, &mut recorder, sav) {
                         if !msg.is_empty() {
