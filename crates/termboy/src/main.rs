@@ -124,6 +124,49 @@ fn handle_slot_key<C: Core>(k: &KeyEvent, core: &mut C, sav: &Path) -> Option<St
 /// If `k` is a playback control, apply it and return the overlay badge to
 /// flash. `+`/`=` speed up, `-`/`_` slow down, `m` toggles audio mute. Like the
 /// save-state digits, these keys are reserved — they never reach the game.
+/// `<rom-dir>/<rom-stem>-<unix_millis><suffix>.png`, derived from the save path.
+fn capture_path(sav: &Path, suffix: &str) -> PathBuf {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let base = sav.with_extension(""); // strips ".sav" -> <dir>/<stem>
+    PathBuf::from(format!("{}-{}{}.png", base.display(), ts, suffix))
+}
+
+/// `P` flags a screenshot (taken on the next frame); `R` toggles recording and
+/// writes the clip on stop. Returns the overlay to show, an empty string for
+/// "consumed silently", or `None` if it's not a capture key.
+fn handle_capture_key(
+    k: &KeyEvent,
+    screenshot_pending: &mut bool,
+    recorder: &mut Option<capture::Recorder>,
+    sav: &Path,
+) -> Option<String> {
+    let KeyCode::Char(c) = k.code else { return None };
+    match c.to_ascii_lowercase() {
+        'p' => {
+            *screenshot_pending = true;
+            Some(String::new())
+        }
+        'r' => Some(match recorder.take() {
+            Some(rec) => {
+                let path = capture_path(sav, "-clip");
+                let label = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                match std::fs::write(&path, rec.finish()) {
+                    Ok(()) => format!("saved clip {label}"),
+                    Err(e) => format!("clip failed: {e}"),
+                }
+            }
+            None => {
+                *recorder = Some(capture::Recorder::new(3));
+                "\u{25CF} REC".to_string() // ● REC
+            }
+        }),
+        _ => None,
+    }
+}
+
 fn handle_playback_key(k: &KeyEvent, pb: &mut playback::Playback) -> Option<String> {
     let KeyCode::Char(c) = k.code else { return None };
     match c {
@@ -831,6 +874,9 @@ fn run_game<C: Core>(
     let mut rewind = rewind::Rewind::new();
     let mut rewind_key = input::HoldKey::new(input.enhanced());
     let mut rewind_tick: u32 = 0;
+    let mut recorder: Option<capture::Recorder> = None;
+    let mut screenshot_pending = false;
+    let mut capture_tick: u32 = 0;
     let code = 'game: loop {
         // Input: Esc quits, number keys drive save-state slots, the rest goes
         // to the button tracker.
@@ -846,7 +892,12 @@ fn run_game<C: Core>(
                     if k.code == KeyCode::Esc {
                         break 'game ExitCode::SUCCESS;
                     }
-                    if let Some(msg) = handle_slot_key(&k, &mut core, sav) {
+                    if let Some(msg) = handle_capture_key(&k, &mut screenshot_pending, &mut recorder, sav) {
+                        if !msg.is_empty() {
+                            overlay = Some(msg);
+                            overlay_until = Instant::now() + Duration::from_millis(1500);
+                        }
+                    } else if let Some(msg) = handle_slot_key(&k, &mut core, sav) {
                         overlay = Some(msg);
                         overlay_until = Instant::now() + Duration::from_millis(1500);
                     } else if let Some(msg) = handle_playback_key(&k, &mut playback) {
@@ -925,6 +976,31 @@ fn run_game<C: Core>(
                 let fb = core.run_frame(buttons);
                 if i + 1 == due {
                     renderer.frame(fb.clone(), overlay.clone());
+                    if screenshot_pending {
+                        screenshot_pending = false;
+                        let path = capture_path(sav, "");
+                        let label = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                        overlay = Some(match std::fs::write(&path, capture::encode_png(fb, 4)) {
+                            Ok(()) => format!("saved {label}"),
+                            Err(e) => format!("screenshot failed: {e}"),
+                        });
+                        overlay_until = Instant::now() + Duration::from_millis(1500);
+                    }
+                    let mut auto_save = false;
+                    if let Some(rec) = recorder.as_mut() {
+                        capture_tick = capture_tick.wrapping_add(1);
+                        if capture_tick % 2 == 0 {
+                            rec.push(fb);
+                        }
+                        auto_save = rec.len() >= 600; // ~20s safety cap
+                    }
+                    if auto_save && let Some(rec) = recorder.take() {
+                        let path = capture_path(sav, "-clip");
+                        let label = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                        let _ = std::fs::write(&path, rec.finish());
+                        overlay = Some(format!("saved clip {label}"));
+                        overlay_until = Instant::now() + Duration::from_millis(1500);
+                    }
                 }
                 core.drain_audio(&mut audio_buf);
                 if playback.is_muted() {

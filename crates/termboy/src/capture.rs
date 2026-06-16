@@ -102,10 +102,6 @@ impl Recorder {
         self.frames.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.frames.is_empty()
-    }
-
     /// Assemble the APNG. ~30 fps (delay 1/30). Each frame is a full image.
     pub fn finish(self) -> Vec<u8> {
         let mut out = Vec::new();
