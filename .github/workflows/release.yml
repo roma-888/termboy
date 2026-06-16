@@ -27,10 +27,13 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Third-party actions are pinned to a commit SHA (not a moving tag) so a
+      # compromised upstream tag can't silently change what runs here. The
+      # trailing comment is the human-readable version the SHA corresponds to.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -42,18 +45,23 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked -p termboy --target ${{ matrix.target }}
 
+      # ref_name/target reach the script through env, never spliced into the
+      # shell body — a tag name with shell metacharacters can't inject commands.
       - name: Package tarball
         shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
         run: |
-          staging="termboy-${{ github.ref_name }}-${{ matrix.target }}"
+          staging="termboy-${REF_NAME}-${TARGET}"
           mkdir "$staging"
-          cp "target/${{ matrix.target }}/release/termboy" "$staging/"
+          cp "target/${TARGET}/release/termboy" "$staging/"
           cp README.md LICENSE "$staging/"
           tar czf "$staging.tar.gz" "$staging"
           echo "ASSET=$staging.tar.gz" >> "$GITHUB_ENV"
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: ${{ env.ASSET }}

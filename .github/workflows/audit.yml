@@ -1,0 +1,29 @@
+name: audit
+
+# Cross-checks the locked dependency tree against the RustSec advisory DB.
+# Runs on any change to the dependency set, on every PR, and weekly so a newly
+# published advisory against an already-pinned crate is surfaced without a commit.
+on:
+  push:
+    branches: [main]
+    paths: ["**/Cargo.toml", "Cargo.lock", ".github/workflows/audit.yml"]
+  pull_request:
+    paths: ["**/Cargo.toml", "Cargo.lock", ".github/workflows/audit.yml"]
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # the action opens an issue for new advisories on scheduled runs
+  checks: write # and annotates the PR check on pull_request runs
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a commit SHA (see release.yml) — trailing comment is the version.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
