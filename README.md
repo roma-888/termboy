@@ -143,6 +143,7 @@ mute     = false
 - `exact` — `true` requires a native-size terminal (no auto-scaling)
 - `speed` — starting speed: `0.5`, `1`, `2`, or `4`
 - `mute` — `true` starts with audio muted
+- `color-correct` — GBA only: `true` applies hardware-accurate color correction (off by default)
 
 A bad value or unknown key is reported and skipped — a config typo never stops a
 game from launching.
