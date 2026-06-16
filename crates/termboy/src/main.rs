@@ -422,13 +422,15 @@ impl Display {
         }
     }
 
-    /// Draw the pause menu over the dimmed, frozen `fb`. The kitty path composes
-    /// at display resolution (crisp text); half-block composes at native res.
-    fn render_menu(&mut self, fb: &termboy_core::FrameBuffer, view: &pause::MenuView, out: &mut String) {
+    /// Draw the pause menu as a full-screen terminal-text screen. The text is
+    /// renderer-independent; the kitty path first removes the game image so it
+    /// doesn't show through, and the half-block path drops its stale diff state.
+    fn render_menu(&mut self, view: &pause::MenuView, cols: usize, rows: usize, out: &mut String) {
         match self {
-            Display::Half(s) => s.render_menu(fb, view, out),
-            Display::Kitty(k) => k.render_menu(fb, view, out),
+            Display::Half(s) => s.invalidate(),
+            Display::Kitty(_) => out.push_str("\x1b_Ga=d,d=A\x1b\\"),
         }
+        out.push_str(&pause::render(view, cols, rows));
     }
 
     /// On exit, free any transmitted image so it doesn't linger in the terminal.
@@ -445,20 +447,19 @@ impl Display {
 /// never backs up or stalls emulation.
 enum RenderMsg {
     Frame { fb: termboy_core::FrameBuffer, overlay: Option<String> },
-    /// The frozen game frame plus the pause-menu model; the renderer dims and
-    /// draws the panel itself (at display resolution on the kitty path, so the
-    /// text is crisp rather than native-then-upscaled).
-    Menu { fb: termboy_core::FrameBuffer, view: pause::MenuView },
+    /// The pause-menu model plus the terminal size; the renderer draws it as a
+    /// full-screen terminal-text menu (crisp, ROM-picker style).
+    Menu { view: pause::MenuView, cols: usize, rows: usize },
     Viewport { cols: usize, rows: usize, cell_px: Option<(usize, usize)> },
     Invalidate,
     /// Bytes to write verbatim (resize clear, too-small notice).
     Raw(String),
 }
 
-/// The freshest thing to draw this wake-up: a game frame or a pause-menu frame.
+/// The freshest thing to draw this wake-up: a game frame or the pause menu.
 enum Draw {
     Frame(termboy_core::FrameBuffer, Option<String>),
-    Menu(termboy_core::FrameBuffer, pause::MenuView),
+    Menu(pause::MenuView, usize, usize),
 }
 
 /// Handle to the render worker. The worker owns the `Display` and is the only
@@ -487,8 +488,8 @@ impl Renderer {
     fn frame(&self, fb: termboy_core::FrameBuffer, overlay: Option<String>) {
         self.send(RenderMsg::Frame { fb, overlay });
     }
-    fn menu(&self, fb: termboy_core::FrameBuffer, view: pause::MenuView) {
-        self.send(RenderMsg::Menu { fb, view });
+    fn menu(&self, view: pause::MenuView, cols: usize, rows: usize) {
+        self.send(RenderMsg::Menu { view, cols, rows });
     }
     fn viewport(&self, cols: usize, rows: usize, cell_px: Option<(usize, usize)>) {
         self.send(RenderMsg::Viewport { cols, rows, cell_px });
@@ -534,7 +535,7 @@ fn render_loop(mut display: Display, rx: std::sync::mpsc::Receiver<RenderMsg>) {
         loop {
             match msg {
                 RenderMsg::Frame { fb, overlay } => latest = Some(Draw::Frame(fb, overlay)),
-                RenderMsg::Menu { fb, view } => latest = Some(Draw::Menu(fb, view)),
+                RenderMsg::Menu { view, cols, rows } => latest = Some(Draw::Menu(view, cols, rows)),
                 RenderMsg::Viewport { cols, rows, cell_px } => {
                     display.set_viewport(cols, rows, cell_px)
                 }
@@ -569,14 +570,14 @@ fn render_loop(mut display: Display, rx: std::sync::mpsc::Receiver<RenderMsg>) {
                     }
                     display.render(&fb, &mut out);
                 }
-                Draw::Menu(fb, view) => {
+                Draw::Menu(view, cols, rows) => {
                     // The menu draws its own chrome; drop any transient overlay
-                    // so a stale badge doesn't sit on top of the panel.
+                    // so a stale badge doesn't sit on top of it.
                     if last_overlay.is_some() {
                         display.clear_overlay();
                         last_overlay = None;
                     }
-                    display.render_menu(&fb, &view, &mut out);
+                    display.render_menu(&view, cols, rows, &mut out);
                 }
             }
             if !out.is_empty() {
@@ -1019,9 +1020,8 @@ fn run_game<C: Core>(
                 menu_dirty = true;
             }
             if menu_dirty {
-                if let Some(fb) = &last_fb {
-                    renderer.menu(fb.clone(), paused.as_ref().unwrap().view());
-                }
+                let (mc, mr) = terminal::size().unwrap_or((80, 24));
+                renderer.menu(paused.as_ref().unwrap().view(), mc as usize, mr as usize);
                 menu_dirty = false;
             }
             // Block briefly for input so we don't busy-spin while paused.
