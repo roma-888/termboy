@@ -77,6 +77,76 @@ pub fn encode_png(fb: &FrameBuffer, scale: usize) -> Vec<u8> {
     out
 }
 
+/// Accumulates frames as already-zlib-compressed image data (so memory holds
+/// compressed bytes, not raw RGB), then assembles an APNG on `finish`.
+pub struct Recorder {
+    scale: usize,
+    w: usize,
+    h: usize,
+    frames: Vec<Vec<u8>>,
+}
+
+impl Recorder {
+    pub fn new(scale: usize) -> Self {
+        Self { scale, w: 0, h: 0, frames: Vec::new() }
+    }
+
+    pub fn push(&mut self, fb: &FrameBuffer) {
+        let (w, h, rgb) = upscale(fb, self.scale);
+        self.w = w;
+        self.h = h;
+        self.frames.push(compress_image(w, h, &rgb, 1)); // level 1: fast, per-frame
+    }
+
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    /// Assemble the APNG. ~30 fps (delay 1/30). Each frame is a full image.
+    pub fn finish(self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&SIG);
+        chunk(&mut out, b"IHDR", &ihdr(self.w, self.h));
+
+        let mut actl = Vec::with_capacity(8);
+        actl.extend_from_slice(&(self.frames.len() as u32).to_be_bytes());
+        actl.extend_from_slice(&0u32.to_be_bytes()); // num_plays: 0 = loop forever
+        chunk(&mut out, b"acTL", &actl);
+
+        let mut seq: u32 = 0;
+        for (i, data) in self.frames.iter().enumerate() {
+            let mut fctl = Vec::with_capacity(26);
+            fctl.extend_from_slice(&seq.to_be_bytes());
+            seq += 1;
+            fctl.extend_from_slice(&(self.w as u32).to_be_bytes());
+            fctl.extend_from_slice(&(self.h as u32).to_be_bytes());
+            fctl.extend_from_slice(&0u32.to_be_bytes()); // x_offset
+            fctl.extend_from_slice(&0u32.to_be_bytes()); // y_offset
+            fctl.extend_from_slice(&1u16.to_be_bytes()); // delay_num
+            fctl.extend_from_slice(&30u16.to_be_bytes()); // delay_den
+            fctl.push(0); // dispose_op: none
+            fctl.push(0); // blend_op: source
+            chunk(&mut out, b"fcTL", &fctl);
+
+            if i == 0 {
+                chunk(&mut out, b"IDAT", data);
+            } else {
+                let mut fdat = Vec::with_capacity(4 + data.len());
+                fdat.extend_from_slice(&seq.to_be_bytes());
+                seq += 1;
+                fdat.extend_from_slice(data);
+                chunk(&mut out, b"fdAT", &fdat);
+            }
+        }
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +190,25 @@ mod tests {
         assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 6);
         assert!(cs.iter().any(|(k, _)| k == b"IDAT"));
         assert_eq!(cs.last().unwrap().0, *b"IEND");
+    }
+
+    #[test]
+    fn apng_has_actl_and_per_frame_chunks() {
+        let mut rec = Recorder::new(2);
+        for _ in 0..3 {
+            rec.push(&solid(2, 2, Rgb(1, 2, 3)));
+        }
+        assert_eq!(rec.len(), 3);
+        let png = rec.finish();
+        let cs = chunks(&png); // also verifies every CRC
+        let count = |t: &[u8; 4]| cs.iter().filter(|(k, _)| k == t).count();
+        assert_eq!(count(b"acTL"), 1);
+        assert_eq!(count(b"fcTL"), 3); // one per frame
+        assert_eq!(count(b"IDAT"), 1); // first frame
+        assert_eq!(count(b"fdAT"), 2); // remaining frames
+        assert_eq!(cs.last().unwrap().0, *b"IEND");
+        // acTL num_frames: sig(8) + IHDR chunk(25) + acTL header(8) = 41.
+        let actl_off = 8 + (12 + 13) + 8;
+        assert_eq!(u32::from_be_bytes(png[actl_off..actl_off + 4].try_into().unwrap()), 3);
     }
 }
