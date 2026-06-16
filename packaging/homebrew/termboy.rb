@@ -7,15 +7,15 @@
 #     # add this file as Formula/termboy.rb in that repo
 #
 # Before publishing a new version, bump `url` to the new tag and refresh sha256:
-#     curl -sL https://github.com/roma-888/termboy/archive/refs/tags/v0.3.0.tar.gz | shasum -a 256
+#     curl -sL https://github.com/roma-888/termboy/archive/refs/tags/v0.4.0.tar.gz | shasum -a 256
 #
 # This builds from source (a few minutes — fat LTO). Switch to bottling later if
 # you want instant installs.
 class Termboy < Formula
   desc "Game Boy, Game Boy Color, and Game Boy Advance emulator for your terminal"
   homepage "https://github.com/roma-888/termboy"
-  url "https://github.com/roma-888/termboy/archive/refs/tags/v0.3.0.tar.gz"
-  sha256 "a2506be0b58afa117c700d6a5168c7a86671f06c5be10045590e316869adbcaf"
+  url "https://github.com/roma-888/termboy/archive/refs/tags/v0.4.0.tar.gz"
+  sha256 "ddf14240fd934c4b0f1a329fd2d4e7776d78753ca7127be2faaac2429c510cc7"
   license "MIT"
   head "https://github.com/roma-888/termboy.git", branch: "main"
 
