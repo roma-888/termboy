@@ -363,6 +363,15 @@ impl Display {
         }
     }
 
+    /// Draw the pause menu over the dimmed, frozen `fb`. The kitty path composes
+    /// at display resolution (crisp text); half-block composes at native res.
+    fn render_menu(&mut self, fb: &termboy_core::FrameBuffer, view: &pause::MenuView, out: &mut String) {
+        match self {
+            Display::Half(s) => s.render_menu(fb, view, out),
+            Display::Kitty(k) => k.render_menu(fb, view, out),
+        }
+    }
+
     /// On exit, free any transmitted image so it doesn't linger in the terminal.
     fn teardown(&self, out: &mut String) {
         if let Display::Kitty(_) = self {
@@ -377,10 +386,20 @@ impl Display {
 /// never backs up or stalls emulation.
 enum RenderMsg {
     Frame { fb: termboy_core::FrameBuffer, overlay: Option<String> },
+    /// The frozen game frame plus the pause-menu model; the renderer dims and
+    /// draws the panel itself (at display resolution on the kitty path, so the
+    /// text is crisp rather than native-then-upscaled).
+    Menu { fb: termboy_core::FrameBuffer, view: pause::MenuView },
     Viewport { cols: usize, rows: usize, cell_px: Option<(usize, usize)> },
     Invalidate,
     /// Bytes to write verbatim (resize clear, too-small notice).
     Raw(String),
+}
+
+/// The freshest thing to draw this wake-up: a game frame or a pause-menu frame.
+enum Draw {
+    Frame(termboy_core::FrameBuffer, Option<String>),
+    Menu(termboy_core::FrameBuffer, pause::MenuView),
 }
 
 /// Handle to the render worker. The worker owns the `Display` and is the only
@@ -408,6 +427,9 @@ impl Renderer {
 
     fn frame(&self, fb: termboy_core::FrameBuffer, overlay: Option<String>) {
         self.send(RenderMsg::Frame { fb, overlay });
+    }
+    fn menu(&self, fb: termboy_core::FrameBuffer, view: pause::MenuView) {
+        self.send(RenderMsg::Menu { fb, view });
     }
     fn viewport(&self, cols: usize, rows: usize, cell_px: Option<(usize, usize)>) {
         self.send(RenderMsg::Viewport { cols, rows, cell_px });
@@ -448,11 +470,12 @@ fn render_loop(mut display: Display, rx: std::sync::mpsc::Receiver<RenderMsg>) {
         // Block for the next message, then drain whatever else is queued so we
         // render only the freshest frame (control messages still apply in order).
         let Ok(mut msg) = rx.recv() else { break }; // handle dropped -> quit
-        let mut latest: Option<(termboy_core::FrameBuffer, Option<String>)> = None;
+        let mut latest: Option<Draw> = None;
         let mut disconnected = false;
         loop {
             match msg {
-                RenderMsg::Frame { fb, overlay } => latest = Some((fb, overlay)),
+                RenderMsg::Frame { fb, overlay } => latest = Some(Draw::Frame(fb, overlay)),
+                RenderMsg::Menu { fb, view } => latest = Some(Draw::Menu(fb, view)),
                 RenderMsg::Viewport { cols, rows, cell_px } => {
                     display.set_viewport(cols, rows, cell_px)
                 }
@@ -468,22 +491,35 @@ fn render_loop(mut display: Display, rx: std::sync::mpsc::Receiver<RenderMsg>) {
                 }
             }
         }
-        if let Some((fb, overlay)) = latest {
+        if let Some(draw) = latest {
             // Cap the redraw rate so fast-forward doesn't stream frames faster
             // than the terminal can usefully show them.
             let since = last_draw.elapsed();
             if since < FRAME_TIME {
                 std::thread::sleep(FRAME_TIME - since);
             }
-            if overlay != last_overlay {
-                match &overlay {
-                    Some(m) => display.set_overlay(m),
-                    None => display.clear_overlay(),
-                }
-                last_overlay = overlay;
-            }
             out.clear();
-            display.render(&fb, &mut out);
+            match draw {
+                Draw::Frame(fb, overlay) => {
+                    if overlay != last_overlay {
+                        match &overlay {
+                            Some(m) => display.set_overlay(m),
+                            None => display.clear_overlay(),
+                        }
+                        last_overlay = overlay;
+                    }
+                    display.render(&fb, &mut out);
+                }
+                Draw::Menu(fb, view) => {
+                    // The menu draws its own chrome; drop any transient overlay
+                    // so a stale badge doesn't sit on top of the panel.
+                    if last_overlay.is_some() {
+                        display.clear_overlay();
+                        last_overlay = None;
+                    }
+                    display.render_menu(&fb, &view, &mut out);
+                }
+            }
             if !out.is_empty() {
                 write(&out);
             }
@@ -925,7 +961,7 @@ fn run_game<C: Core>(
             }
             if menu_dirty {
                 if let Some(fb) = &last_fb {
-                    renderer.frame(pause::compose_menu(fb, &paused.as_ref().unwrap().view()), None);
+                    renderer.menu(fb.clone(), paused.as_ref().unwrap().view());
                 }
                 menu_dirty = false;
             }

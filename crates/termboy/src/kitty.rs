@@ -224,6 +224,39 @@ impl KittyScreen {
         };
         encode_image(&rgb, tw, th, IMAGE_ID, self.cols, self.rows, out);
     }
+
+    /// Draw the pause menu: upscale the frozen game to the on-screen pixel size
+    /// first, then compose the dimmed panel onto *that* buffer, so the panel text
+    /// is rendered at full display resolution (crisp) instead of being drawn at
+    /// the native frame size and blown up with it.
+    pub fn render_menu(&mut self, fb: &FrameBuffer, view: &crate::pause::MenuView, out: &mut String) {
+        use std::fmt::Write;
+        write!(out, "\x1b[{};{}H", self.off_r + 1, self.off_c + 1).unwrap();
+        let (tw, th) = self.target.unwrap_or((self.src_w, self.src_h));
+        let big = upscale_fb(fb, tw, th);
+        let composed = crate::pause::compose_menu(&big, view);
+        let mut rgb = vec![0u8; tw * th * 3];
+        for (i, p) in composed.pixels.iter().enumerate() {
+            rgb[i * 3] = p.0;
+            rgb[i * 3 + 1] = p.1;
+            rgb[i * 3 + 2] = p.2;
+        }
+        encode_image(&rgb, tw, th, IMAGE_ID, self.cols, self.rows, out);
+    }
+}
+
+/// Nearest-neighbor upscale `fb` to `dst_w`x`dst_h` as a new `FrameBuffer`. Used
+/// only by the (rare) pause-menu path; the hot per-frame path uses the packed
+/// `nearest_upscale` to stay allocation-lean.
+fn upscale_fb(fb: &FrameBuffer, dst_w: usize, dst_h: usize) -> FrameBuffer {
+    let mut out = FrameBuffer::new(dst_w, dst_h);
+    for dy in 0..dst_h {
+        let sy = dy * fb.height / dst_h;
+        for dx in 0..dst_w {
+            out.pixels[dy * dst_w + dx] = fb.pixels[sy * fb.width + dx * fb.width / dst_w];
+        }
+    }
+    out
 }
 
 /// Burn the overlay badge (white 3x5 glyphs on a dark box) into the RGB frame,
@@ -361,6 +394,29 @@ mod tests {
         assert!(out.starts_with("\x1b[6;1H"), "cursor not at centered offset: {out:?}");
         assert!(out.contains("\x1b_Ga=T,f=24,o=z,s=4,v=4,"));
         assert!(out.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn render_menu_emits_an_image_at_display_resolution() {
+        let mut k = KittyScreen::new(160, 144);
+        k.set_viewport(80, 40, Some((8, 16))); // reports cell px -> upscales
+        let view = crate::pause::Menu::new(true, "1x".into(), false, [false; crate::pause::SLOTS]).view();
+        let mut out = String::new();
+        k.render_menu(&FrameBuffer::new(160, 144), &view, &mut out);
+        assert!(out.contains("\x1b_Ga=T,f=24,o=z,"));
+        assert!(out.ends_with("\x1b\\"));
+        // The image is sent at the upscaled size, not the native 160x144.
+        assert!(!out.contains("s=160,v=144,"));
+    }
+
+    #[test]
+    fn upscale_fb_replicates_pixels() {
+        let mut fb = FrameBuffer::new(2, 1);
+        fb.pixels = vec![Rgb(10, 0, 0), Rgb(20, 0, 0)];
+        let up = upscale_fb(&fb, 4, 2);
+        assert_eq!(up.pixels[0], Rgb(10, 0, 0));
+        assert_eq!(up.pixels[2], Rgb(20, 0, 0));
+        assert_eq!(up.pixels[4], Rgb(10, 0, 0)); // row 1 replicates row 0
     }
 
     #[test]

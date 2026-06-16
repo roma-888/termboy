@@ -157,6 +157,14 @@ impl Screen {
         }
     }
 
+    /// Draw the pause menu by compositing the panel into a dimmed copy of the
+    /// frame at native resolution, then diffing it like any frame. Half-blocks
+    /// are inherently coarse, so native-res composition is fine here.
+    pub fn render_menu(&mut self, fb: &FrameBuffer, view: &crate::pause::MenuView, out: &mut String) {
+        let composed = crate::pause::compose_menu(fb, view);
+        self.render(&composed, out);
+    }
+
     /// Render `msg` as scaled pixel-blocks near the top-left of the image. The
     /// glyph size scales with the viewport (not the terminal font), so the text
     /// stays a roughly constant fraction of the screen whether the user has
@@ -340,6 +348,16 @@ mod tests {
         out.clear();
         s.render(&fb, &mut out);
         assert!(!out.is_empty()); // full repaint clears the overlay
+    }
+
+    #[test]
+    fn render_menu_draws_panel_pixels() {
+        let mut s = Screen::new(160, 144);
+        s.set_viewport(160, 72);
+        let view = crate::pause::Menu::new(true, "1x".into(), false, [false; crate::pause::SLOTS]).view();
+        let mut out = String::new();
+        s.render_menu(&FrameBuffer::new(160, 144), &view, &mut out);
+        assert!(!out.is_empty()); // the dimmed frame + panel paint cells
     }
 
     #[test]
