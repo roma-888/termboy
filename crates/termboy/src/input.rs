@@ -126,6 +126,13 @@ impl Input {
         }
         out
     }
+
+    /// Clear all held/timed button state — called on resume from the pause menu
+    /// so a direction held when the menu opened doesn't carry into the game.
+    pub fn release_all(&mut self) {
+        self.held = Buttons::default();
+        self.timers = [None; 16];
+    }
 }
 
 /// Hold-detection for a single non-button key (used for rewind). Mirrors the
@@ -260,6 +267,22 @@ mod tests {
         h.handle(KeyEventKind::Press, t0);
         assert!(h.is_held(t0 + Duration::from_millis(100)));
         assert!(!h.is_held(t0 + Duration::from_millis(250)));
+    }
+
+    #[test]
+    fn release_all_clears_held_and_timers() {
+        let t0 = Instant::now();
+        // enhanced: held bits cleared
+        let mut input = Input::new(true, default_keymap());
+        input.handle(&press(KeyCode::Left), t0);
+        assert!(input.buttons(t0).contains(Buttons::LEFT));
+        input.release_all();
+        assert_eq!(input.buttons(t0), Buttons::default());
+        // fallback: timers cleared
+        let mut input = Input::new(false, default_keymap());
+        input.handle(&press(KeyCode::Down), t0);
+        input.release_all();
+        assert_eq!(input.buttons(t0), Buttons::default());
     }
 
     #[test]
