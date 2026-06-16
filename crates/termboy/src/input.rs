@@ -49,6 +49,21 @@ fn key_from_name(name: &str) -> Option<KeyCode> {
     })
 }
 
+/// Display label for a bound key, e.g. `X`, `ENTER`, `RIGHT`.
+fn key_label(code: KeyCode) -> String {
+    match code {
+        KeyCode::Char(' ') => "SPACE".into(),
+        KeyCode::Char(c) => c.to_ascii_uppercase().to_string(),
+        KeyCode::Enter => "ENTER".into(),
+        KeyCode::Tab => "TAB".into(),
+        KeyCode::Up => "UP".into(),
+        KeyCode::Down => "DOWN".into(),
+        KeyCode::Left => "LEFT".into(),
+        KeyCode::Right => "RIGHT".into(),
+        _ => "?".into(),
+    }
+}
+
 /// `swap` (A/B swapped) or `button=key,...` overriding individual buttons.
 pub fn parse_keys(spec: &str) -> Option<HashMap<KeyCode, Buttons>> {
     let mut map = default_keymap();
@@ -125,6 +140,29 @@ impl Input {
             }
         }
         out
+    }
+
+    /// `(action, key)` rows for the face/shoulder buttons, read from the live
+    /// keymap so remaps (e.g. `--keys swap`) show the real key.
+    pub fn button_bindings(&self) -> Vec<(String, String)> {
+        let find = |b: Buttons| {
+            self.keymap
+                .iter()
+                .find(|(_, v)| **v == b)
+                .map(|(k, _)| key_label(*k))
+                .unwrap_or_else(|| "-".into())
+        };
+        [
+            ("A", Buttons::A),
+            ("B", Buttons::B),
+            ("START", Buttons::START),
+            ("SELECT", Buttons::SELECT),
+            ("L", Buttons::L),
+            ("R", Buttons::R),
+        ]
+        .iter()
+        .map(|(name, b)| (name.to_string(), find(*b)))
+        .collect()
     }
 
     /// Clear all held/timed button state — called on resume from the pause menu
@@ -283,6 +321,17 @@ mod tests {
         input.handle(&press(KeyCode::Down), t0);
         input.release_all();
         assert_eq!(input.buttons(t0), Buttons::default());
+    }
+
+    #[test]
+    fn button_bindings_reflect_the_keymap() {
+        let input = Input::new(true, default_keymap());
+        let rows = input.button_bindings();
+        assert!(rows.contains(&("A".to_string(), "X".to_string())));
+        assert!(rows.contains(&("B".to_string(), "Z".to_string())));
+        // A swap rebinds A to Z.
+        let input = Input::new(true, parse_keys("swap").unwrap());
+        assert!(input.button_bindings().contains(&("A".to_string(), "Z".to_string())));
     }
 
     #[test]
