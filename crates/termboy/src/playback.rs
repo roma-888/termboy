@@ -71,15 +71,21 @@ impl Playback {
         self.muted
     }
 
-    /// Terse overlay badge for the current speed, e.g. `speed 2x`, `speed 0.5x`.
-    pub fn speed_label(&self) -> String {
+    /// Bare multiplier label without the "speed " prefix, e.g. `2x`, `0.5x` —
+    /// used by the pause menu's Speed row.
+    pub fn multiplier_label(&self) -> String {
         let m = self.multiplier();
         // Whole multipliers read better without the ".0" (2x, not 2.0x).
         if m.fract() == 0.0 {
-            format!("speed {}x", m as u32)
+            format!("{}x", m as u32)
         } else {
-            format!("speed {m}x")
+            format!("{m}x")
         }
+    }
+
+    /// Terse overlay badge for the current speed, e.g. `speed 2x`, `speed 0.5x`.
+    pub fn speed_label(&self) -> String {
+        format!("speed {}", self.multiplier_label())
     }
 
     /// Terse overlay badge for the mute toggle.
@@ -208,6 +214,17 @@ mod tests {
         assert_eq!(p.mute_label(), "unmuted");
         p.toggle_mute();
         assert_eq!(p.mute_label(), "muted");
+    }
+
+    #[test]
+    fn multiplier_label_is_bare() {
+        let mut p = Playback::new();
+        assert_eq!(p.multiplier_label(), "1x");
+        p.slower();
+        assert_eq!(p.multiplier_label(), "0.5x");
+        p.faster();
+        p.faster();
+        assert_eq!(p.multiplier_label(), "2x");
     }
 
     #[test]
