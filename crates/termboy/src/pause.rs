@@ -237,7 +237,7 @@ impl Menu {
                 MenuView {
                     title: "PAUSED".into(),
                     selected: self.main_sel,
-                    hint: "↑/↓ move · Enter select · Esc resume".into(),
+                    hint: "↑/↓ move · Enter · Esc".into(),
                     selectable: true,
                     rows,
                     preview: None,
@@ -264,7 +264,7 @@ impl Menu {
                 MenuView {
                     title: title.into(),
                     selected: self.slot_sel,
-                    hint: "↑/↓ move · Enter ok · Esc back".into(),
+                    hint: "↑/↓ move · Enter · Esc".into(),
                     selectable: true,
                     rows,
                     preview,
@@ -275,7 +275,7 @@ impl Menu {
                 MenuView {
                     title: "CONTROLS".into(),
                     selected: self.ctrl_sel,
-                    hint: "↑/↓ scroll · Esc back".into(),
+                    hint: "↑/↓ scroll · Esc".into(),
                     selectable: false,
                     rows,
                     preview: None,
@@ -317,75 +317,93 @@ const DIM: &str = "\x1b[2m";
 const REV: &str = "\x1b[7m";
 const ACCENT: &str = "\x1b[38;2;150;180;255m";
 
+const BORDER: &str = "\x1b[38;2;92;98;124m"; // dialog frame
+/// Interior horizontal padding (cells each side) and the list↔preview gap.
+const PAD: usize = 2;
+const GAP: usize = 2;
 /// Preview pane size (cells) on the Save/Load screens.
-const PREVIEW_COLS: usize = 28;
-const PREVIEW_ROWS: usize = 13;
-const PREVIEW_GAP: usize = 4;
+const PREVIEW_COLS: usize = 26;
+const PREVIEW_ROWS: usize = 11;
 
-/// Render the menu as a full-screen ANSI string: a centered title, a windowed row
-/// list (selected row reverse-video when `selectable`), a dim hint, and — on
-/// Save/Load — a half-block preview of the selected slot to the right.
+/// Render the menu as a centered bordered dialog: a title, a windowed row list
+/// (selected row a full-width reverse-video bar when `selectable`), a dim hint,
+/// and — on Save/Load — a half-block preview of the selected slot inside the same
+/// frame, to the right of the list.
 pub fn render(view: &MenuView, cols: usize, rows: usize) -> String {
     use std::fmt::Write as _;
-    let cols = cols.max(24);
-    let rows = rows.max(10);
-
-    let row_w = |r: &Row| {
-        r.label.chars().count() + if r.value.is_empty() { 0 } else { 2 + r.value.chars().count() }
-    };
-    let mut list_w = view.title.chars().count();
-    for r in &view.rows {
-        list_w = list_w.max(row_w(r));
-    }
-    list_w = list_w.max(8);
-
+    let cols = cols.max(30);
+    let rows = rows.max(12);
+    let chars = |s: &str| s.chars().count();
     let has_preview = view.preview.is_some();
-    let block_w = list_w + if has_preview { PREVIEW_GAP + PREVIEW_COLS } else { 0 };
 
-    // Vertical layout: title, blank, rows.., blank, hint (+ 1-row top/bottom margin).
-    let chrome = 4;
-    let avail = rows.saturating_sub(2 + chrome);
-    let visible = view.rows.len().min(avail.max(1));
+    // List column = the row text width: marker(2) + label + (gap + value).
+    let mut list_col = chars(&view.title);
+    for r in &view.rows {
+        let w = 2 + chars(&r.label) + if r.value.is_empty() { 0 } else { 2 + chars(&r.value) };
+        list_col = list_col.max(w);
+    }
+    // Interior text width: the list, plus the preview column on Save/Load, but at
+    // least wide enough to center the title and hint.
+    let base_w = if has_preview { list_col + GAP + PREVIEW_COLS } else { list_col };
+    let inner_w = base_w.max(chars(&view.title)).max(chars(&view.hint));
+
+    // Window the rows to what fits the height, around the selection.
+    let body_cap = rows.saturating_sub(2 + 2 + 2 + 2); // border + blanks + title/hint + margins
+    let visible = view.rows.len().min(body_cap.max(1));
     let top = if view.selected >= visible { view.selected + 1 - visible } else { 0 };
-    let list_h = chrome + visible;
-    let content_h = list_h.max(if has_preview { PREVIEW_ROWS + 2 } else { 0 });
+    let body_h = if has_preview { visible.max(PREVIEW_ROWS) } else { visible };
 
-    let start_row = rows.saturating_sub(content_h) / 2 + 1;
-    let left = cols.saturating_sub(block_w) / 2 + 1;
+    let inner_h = 1 + 1 + body_h + 1 + 1; // title, blank, body, blank, hint
+    let box_w = inner_w + 2 * PAD + 2;
+    let box_h = inner_h + 2;
+    let box_left = cols.saturating_sub(box_w) / 2 + 1;
+    let box_top = rows.saturating_sub(box_h) / 2 + 1;
+    let inner_left = box_left + 1 + PAD;
 
     let mut out = String::from("\x1b[0m\x1b[2J\x1b[H");
-    let mut row = start_row;
 
-    // Title, centered over the list column.
-    let tcol = left + list_w.saturating_sub(view.title.chars().count()) / 2;
-    let _ = write!(out, "\x1b[{row};{tcol}H{BOLD}{ACCENT}{}{RESET}", view.title);
-    row += 2;
-
-    // Rows.
-    for idx in top..top + visible {
-        let r = &view.rows[idx];
-        let used = r.label.chars().count() + r.value.chars().count();
-        let pad = " ".repeat(list_w.saturating_sub(used));
-        let _ = write!(out, "\x1b[{row};{left}H");
-        if view.selectable && idx == view.selected {
-            let _ = write!(out, "{REV} {}{pad}{} {RESET}", r.label, r.value);
-        } else {
-            let _ = write!(out, " {}{pad}{DIM}{}{RESET} ", r.label, r.value);
-        }
-        row += 1;
+    // Border.
+    let hbar = "─".repeat(box_w.saturating_sub(2));
+    let _ = write!(out, "\x1b[{box_top};{box_left}H{BORDER}┌{hbar}┐{RESET}");
+    for r in 1..box_h.saturating_sub(1) {
+        let _ = write!(out, "\x1b[{};{box_left}H{BORDER}│{RESET}", box_top + r);
+        let _ = write!(out, "\x1b[{};{}H{BORDER}│{RESET}", box_top + r, box_left + box_w - 1);
     }
-    row += 1;
+    let _ = write!(out, "\x1b[{};{box_left}H{BORDER}└{hbar}┘{RESET}", box_top + box_h - 1);
 
-    // Hint, centered on the screen.
-    let hcol = cols.saturating_sub(view.hint.chars().count()) / 2 + 1;
-    let _ = write!(out, "\x1b[{row};{hcol}H{DIM}{}{RESET}", view.hint);
+    // Title, centered in the interior.
+    let tcol = inner_left + inner_w.saturating_sub(chars(&view.title)) / 2;
+    let _ = write!(out, "\x1b[{};{tcol}H{BOLD}{ACCENT}{}{RESET}", box_top + 1, view.title);
 
-    // Preview pane to the right of the list.
+    // Rows. The selection bar spans the list column (full interior when there's
+    // no preview), with the value right-aligned in the list column.
+    let row0 = box_top + 3; // after title + blank
+    let bar_w = if has_preview { list_col } else { inner_w };
+    for (line, idx) in (top..top + visible).enumerate() {
+        let r = &view.rows[idx];
+        let selected = view.selectable && idx == view.selected;
+        let marker = if selected { "▸ " } else { "  " };
+        let used = 2 + chars(&r.label) + chars(&r.value);
+        let fill = " ".repeat(list_col.saturating_sub(used));
+        let at = format!("\x1b[{};{inner_left}H", row0 + line);
+        if selected {
+            let trail = " ".repeat(bar_w.saturating_sub(list_col));
+            let _ = write!(out, "{at}{REV}{marker}{}{fill}{}{trail}{RESET}", r.label, r.value);
+        } else {
+            let _ = write!(out, "{at}{marker}{}{fill}{DIM}{}{RESET}", r.label, r.value);
+        }
+    }
+
+    // Hint, centered in the interior.
+    let hrow = row0 + body_h + 1;
+    let hcol = inner_left + inner_w.saturating_sub(chars(&view.hint)) / 2;
+    let _ = write!(out, "\x1b[{hrow};{hcol}H{DIM}{}{RESET}", view.hint);
+
+    // Preview, aligned with the first row.
     if let Some(t) = &view.preview {
-        let pcol = left + list_w + PREVIEW_GAP;
-        let prow = start_row + 1;
+        let pcol = inner_left + list_col + GAP;
         for (i, line) in thumb_cells(t, PREVIEW_COLS, PREVIEW_ROWS).iter().enumerate() {
-            let _ = write!(out, "\x1b[{};{pcol}H{line}{RESET}", prow + i);
+            let _ = write!(out, "\x1b[{};{pcol}H{line}{RESET}", row0 + i);
         }
     }
 
@@ -593,6 +611,7 @@ mod tests {
         assert!(s.contains("PAUSED"));
         assert!(s.contains("Resume"));
         assert!(s.contains(REV)); // selectable -> selected row highlighted
+        assert!(s.contains('┌') && s.contains('┘')); // bordered dialog
     }
 
     #[test]
@@ -626,3 +645,4 @@ mod tests {
         assert!(s.contains('\u{2580}')); // half-block preview cell
     }
 }
+
