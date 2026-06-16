@@ -9,6 +9,7 @@ mod config;
 mod input;
 mod kitty;
 mod menu;
+mod pause;
 mod playback;
 mod rewind;
 mod screen;
