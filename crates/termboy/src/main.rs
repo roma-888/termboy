@@ -451,8 +451,14 @@ fn main() -> ExitCode {
     let exact = args.iter().any(|a| a == "--exact");
     // Defaults < config file < CLI flags.
     let mut settings = config::Settings::default();
-    if let Some(path) = config_path_arg(&args).or_else(config::default_path) {
-        config::load(&path, &mut settings);
+    match config_path_arg(&args) {
+        Some(path) => config::load(&path, &mut settings),
+        None => {
+            if let Some(path) = config::default_path() {
+                config::ensure(&path); // first run: drop a commented starter config
+                config::load(&path, &mut settings);
+            }
+        }
     }
 
     let mut rom_arg: Option<&str> = None;

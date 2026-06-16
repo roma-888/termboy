@@ -126,6 +126,46 @@ pub fn default_path() -> Option<PathBuf> {
     )
 }
 
+/// A commented starter config written on first run. Every setting is shown,
+/// commented out, with its hint on its OWN line (never inline — hex palettes
+/// contain `#`), so uncommenting `# palette = green` yields a valid line.
+const TEMPLATE: &str = "\
+# termboy configuration. Uncomment a line and edit it to change that setting.
+# Command-line flags override these; a '#' is a comment only at the start of a line.
+
+# palette: green | gray | pocket | four hex colors like #e0f8d0,#88c070,#346856,#081820 (Game Boy only)
+# palette = green
+
+# keys: 'swap', or per-button — a=k,b=j,start=space
+# keys = a=k,b=j
+
+# graphics: auto | kitty | half
+# graphics = auto
+
+# exact: true requires a native-size terminal (no auto-scaling)
+# exact = false
+
+# speed: starting speed — 0.5, 1, 2, or 4
+# speed = 1
+
+# mute: true starts with audio muted
+# mute = false
+";
+
+/// Write the commented starter config to `path` if nothing is there yet, so a
+/// fresh install always has a file to edit. Best-effort: any IO error (missing
+/// parent, permissions) is ignored — the app then runs on defaults, exactly as
+/// if the file were absent.
+pub fn ensure(path: &Path) {
+    if path.exists() {
+        return;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, TEMPLATE);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +280,24 @@ mod tests {
             Some(PathBuf::from("/home/u/.config/termboy/config"))
         );
         assert_eq!(path_from(Some(PathBuf::new()), None), None);
+    }
+
+    #[test]
+    fn ensure_creates_template_once_without_clobbering() {
+        let p = std::env::temp_dir().join("termboy-cfg-ensure");
+        fs::remove_file(&p).ok();
+        ensure(&p);
+        assert!(p.exists());
+        // the fresh template is all comments: loading it changes nothing
+        let mut s = Settings::default();
+        load(&p, &mut s);
+        assert_eq!(s.speed, 1.0);
+        assert_eq!(s.palette, DMG_GREEN);
+        // an existing file is never overwritten
+        fs::write(&p, "speed = 4\n").unwrap();
+        ensure(&p);
+        let body = fs::read_to_string(&p).unwrap();
+        fs::remove_file(&p).ok();
+        assert_eq!(body, "speed = 4\n");
     }
 }

@@ -120,10 +120,12 @@ snappier hold, reduce your OS key-repeat delay.
 
 termboy reads optional defaults from `$XDG_CONFIG_HOME/termboy/config` (falling
 back to `~/.config/termboy/config`), or from the path given by `--config <path>`.
-It's a flat `key = value` file. A `#` starts a comment only at the **beginning of
-a line** — never inline, because hex palette values contain `#`. Any command-line
-flag overrides the matching setting, and every in-game control still works as
-usual; these are just the values a game *starts* with.
+**On first run it writes a commented starter file there** — every setting shown
+but commented out — so there's always one to edit; uncomment a line to change that
+setting. It's a flat `key = value` file. A `#` starts a comment only at the
+**beginning of a line** — never inline, because hex palette values contain `#`.
+Any command-line flag overrides the matching setting, and every in-game control
+still works as usual; these are just the values a game *starts* with.
 
 ```
 # ~/.config/termboy/config
