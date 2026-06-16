@@ -265,6 +265,9 @@ pub(crate) fn glyph(c: char) -> [&'static str; 5] {
         'X' => ["# #", "# #", " # ", "# #", "# #"],
         'Y' => ["# #", "# #", " # ", " # ", " # "],
         'Z' => ["###", "  #", " # ", "#  ", "###"],
+        '+' => ["   ", " # ", "###", " # ", "   "],
+        '-' => ["   ", "   ", "###", "   ", "   "],
+        '/' => ["  #", "  #", " # ", "#  ", "#  "],
         _ => ["###", "# #", "# #", "# #", "###"],
     }
 }
@@ -361,6 +364,13 @@ mod tests {
         let mut out = String::new();
         s.render_menu(&FrameBuffer::new(160, 144), &view, &mut out);
         assert!(!out.is_empty()); // the dimmed frame + panel paint cells
+    }
+
+    #[test]
+    fn glyph_has_symbol_chars() {
+        assert_eq!(glyph('-')[2], "###");
+        assert!(glyph('+').iter().any(|r| r.contains('#')));
+        assert!(glyph('/').iter().any(|r| r.contains('#')));
     }
 
     #[test]
