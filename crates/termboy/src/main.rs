@@ -4,6 +4,7 @@
 //! `--headless` runs without UI and streams serial output (debug tool).
 
 mod audio;
+mod config;
 mod input;
 mod kitty;
 mod menu;
@@ -43,7 +44,7 @@ options:
 controls: arrows = D-pad, X = A, Z = B, A/S = L/R, Enter = Start, Tab = Select
           +/- = speed (0.5x-4x), M = mute, Backspace = rewind, Esc = quit";
 
-fn parse_palette(name: &str) -> Option<[Rgb; 4]> {
+pub(crate) fn parse_palette(name: &str) -> Option<[Rgb; 4]> {
     match name {
         "green" => Some(DMG_GREEN),
         "gray" | "grey" => Some([
@@ -227,7 +228,7 @@ const MAX_CATCHUP: u32 = 4;
 /// Which renderer to use. `Auto` picks kitty graphics on terminals that support
 /// it (detected from the environment), half-blocks elsewhere.
 #[derive(Clone, Copy)]
-enum GraphicsPref {
+pub(crate) enum GraphicsPref {
     Auto,
     Kitty,
     Half,
