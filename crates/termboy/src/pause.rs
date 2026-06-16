@@ -268,6 +268,17 @@ fn text_width(text: &str, scale: usize) -> usize {
     }
 }
 
+/// Widest rendered line (title, hint, or a label+value row) at `scale`.
+fn widest(view: &MenuView, scale: usize) -> usize {
+    let mut w = text_width(&view.title, scale).max(text_width(&view.hint, scale));
+    for r in &view.rows {
+        let rw = text_width(&r.label, scale)
+            + if r.value.is_empty() { 0 } else { 4 * scale + text_width(&r.value, scale) };
+        w = w.max(rw);
+    }
+    w
+}
+
 /// Draw uppercase `text` with the 3x5 glyph font, each font pixel `scale`x`scale`,
 /// top-left at (x, y).
 fn draw_text(fb: &mut FrameBuffer, x: usize, y: usize, scale: usize, text: &str, c: Rgb) {
@@ -293,27 +304,36 @@ pub fn compose_menu(fb: &FrameBuffer, view: &MenuView) -> FrameBuffer {
         out.pixels[i] = dim_px(*p);
     }
 
-    let scale = (fb.height / 80).max(1); // GB(144)->1, GBA(160)->2
+    // The panel floats with margins (~85% of the frame at most) and its text is
+    // crisp at the kitty path's display resolution. Pick the largest glyph scale
+    // — capped to a sane size — whose panel (widest line, up to 8 rows + chrome)
+    // fits those margins; smaller frames or longer hints just shrink the text.
+    let max_w = fb.width * 85 / 100;
+    let max_h = fb.height * 85 / 100;
+    let mut scale = (fb.height / 110).clamp(1, 14);
+    while scale > 1 {
+        let pad = 3 * scale;
+        let line_h = GLYPH_H * scale + scale;
+        let want_rows = view.rows.len().min(8);
+        let panel_w = widest(view, scale) + 2 * pad;
+        let panel_h = 2 * pad + 2 * line_h + 2 * scale + want_rows * line_h;
+        if panel_w <= max_w && panel_h <= max_h {
+            break;
+        }
+        scale -= 1;
+    }
     let line_h = GLYPH_H * scale + scale; // glyph height + 1px gap, scaled
     let pad = 3 * scale;
     let gap = scale; // space around the title / hint
 
-    // Widest content line decides panel width.
-    let mut content_w = text_width(&view.title, scale).max(text_width(&view.hint, scale));
-    for r in &view.rows {
-        let w = text_width(&r.label, scale)
-            + if r.value.is_empty() { 0 } else { 4 * scale + text_width(&r.value, scale) };
-        content_w = content_w.max(w);
-    }
-
-    // Rows that fit between the title and the hint, then window around `selected`.
-    let avail = fb.height.saturating_sub(2 * pad + 2 * line_h + 2 * gap);
+    // Window the rows to what fits the height budget, around the selection.
+    let avail = max_h.saturating_sub(2 * pad + 2 * line_h + 2 * gap);
     let max_rows = (avail / line_h).max(1);
     let visible = view.rows.len().min(max_rows);
     let top = if view.selected >= visible { view.selected + 1 - visible } else { 0 };
 
-    let panel_w = (content_w + 2 * pad).min(fb.width);
-    let panel_h = (pad + line_h + gap + visible * line_h + gap + line_h + pad).min(fb.height);
+    let panel_w = (widest(view, scale) + 2 * pad).min(max_w);
+    let panel_h = (pad + line_h + gap + visible * line_h + gap + line_h + pad).min(max_h);
     let px = (fb.width - panel_w) / 2;
     let py = (fb.height - panel_h) / 2;
 
@@ -460,6 +480,24 @@ mod tests {
         // The panel drew title-colored pixels and a selected-row highlight.
         assert!(out.pixels.iter().any(|p| *p == TITLE));
         assert!(out.pixels.iter().any(|p| *p == SEL_BG));
+    }
+
+    #[test]
+    fn compose_menu_leaves_edge_margins_at_display_resolution() {
+        // At a large (upscaled) buffer the panel must float with margins, not
+        // fill the screen and overflow the hint off both edges.
+        let mut fb = FrameBuffer::new(1600, 900);
+        for p in fb.pixels.iter_mut() {
+            *p = Rgb(200, 200, 200);
+        }
+        let view = Menu::new(true, "1x".into(), false, [false; SLOTS]).view();
+        let out = compose_menu(&fb, &view);
+        let dim = dim_px(Rgb(200, 200, 200));
+        // Edge columns at mid-height stay dimmed background (panel within margins).
+        assert_eq!(out.pixels[450 * 1600], dim);
+        assert_eq!(out.pixels[450 * 1600 + 1599], dim);
+        // The panel still exists toward the middle.
+        assert!(out.pixels.iter().any(|p| *p == BG || *p == BORDER));
     }
 
     #[test]
