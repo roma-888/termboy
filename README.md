@@ -96,7 +96,14 @@ throughput -- <rom.gba>`. That completes the GBA roadmap — cycle-exact timing
 | Backspace (hold) | Rewind |
 | P | Save a screenshot (PNG → `images/`) |
 | R | Start/stop recording a clip (animated PNG → `clips/`) |
-| Esc | Quit |
+| Esc | Open the pause menu |
+
+**Pause menu:** `Esc` opens a pause menu over the dimmed game — **Resume**,
+**Save**/**Load** (a slot picker showing which slots are filled), **Speed** and
+**Mute**, **Back to library** (return to the ROM picker without quitting), and
+**Quit**. `↑/↓` move, `Enter` selects, `←/→` adjust the speed row, and `Esc`
+backs out (or resumes from the top). The menu is additive — every direct hotkey
+above still works during play.
 
 Save states capture the full machine and persist to `<rom>.ss0`…`<rom>.ss9`, so
 they survive quitting. A brief overlay confirms each save/load. (The load

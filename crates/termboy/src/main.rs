@@ -48,7 +48,7 @@ options:
   -h, --help         show this help
 
 controls: arrows = D-pad, X = A, Z = B, A/S = L/R, Enter = Start, Tab = Select
-          +/- = speed (0.5x-4x), M = mute, Backspace = rewind, Esc = quit";
+          +/- = speed (0.5x-4x), M = mute, Backspace = rewind, Esc = pause menu";
 
 pub(crate) fn parse_palette(name: &str) -> Option<[Rgb; 4]> {
     match name {
