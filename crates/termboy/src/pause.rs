@@ -10,6 +10,19 @@ use crate::screen::{glyph, GLYPH_H, GLYPH_W};
 /// Number of save-state slots (digits 0-9).
 pub const SLOTS: usize = 10;
 
+/// Compact "time ago" for a slot's save file, from seconds elapsed.
+pub fn age_label(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
 /// Which menu screen is showing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
@@ -459,6 +472,14 @@ mod tests {
             m.down();
         }
         assert_eq!(m.select(), Action::Library);
+    }
+
+    #[test]
+    fn age_label_picks_a_compact_unit() {
+        assert_eq!(age_label(5), "5s");
+        assert_eq!(age_label(90), "1m");
+        assert_eq!(age_label(3700), "1h");
+        assert_eq!(age_label(90_000), "1d");
     }
 
     #[test]
