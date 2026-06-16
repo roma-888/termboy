@@ -221,7 +221,11 @@ impl Bus {
             let second_target = bldcnt & (1 << (8 + second.1)) != 0;
             let special_ok = win & 0x20 != 0;
             let mut color = top.0;
-            if top.1 == 4 && op.semi && second_target && special_ok {
+            // Semi-transparent objects always alpha-blend with a 2nd-target
+            // pixel below — independent of BLDCNT's effect mode AND of the
+            // window color-effects bit (only BG/brightness effects are
+            // window-gated). Pokémon FRLG fog relies on this.
+            if top.1 == 4 && op.semi && second_target {
                 color = alpha_blend(top.0, second.0, eva, evb);
             } else if special_ok && first_target {
                 match (bldcnt >> 6) & 3 {

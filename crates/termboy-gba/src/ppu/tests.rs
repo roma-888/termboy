@@ -502,6 +502,32 @@ fn semi_transparent_obj_forces_alpha() {
 }
 
 #[test]
+fn semi_transparent_obj_blends_when_window_disables_color_effects() {
+    // Regression: Pokémon FRLG fog is semi-transparent sprites rendered with the
+    // window's color-effects bit (WININ/WINOUT bit 5) OFF. Hardware still blends
+    // semi-transparent objects regardless of that bit — only BLDCNT-driven
+    // BG/brightness effects are window-gated. termboy used to gate the
+    // semi-transparent blend on it too, so the fog rendered fully opaque.
+    let mut b = bus();
+    set_dispcnt(&mut b, 0x3100); // BG0 + OBJ + window 0 enabled (bit 13)
+    b.write16(0x0400_0008, 0x0100); // BG0: screen base 1
+    b.write16(0x0500_0002, 0x7C00); // BG: blue
+    fill_tile_4bpp(&mut b, 0, 1, 1);
+    set_entry(&mut b, 0x800, 0, 0, 0, 0x0001);
+    b.write16(0x0500_0202, 0x001F); // OBJ: red
+    fill_obj_tile_4bpp(&mut b, 1, 1);
+    set_obj(&mut b, 0, 0x0400, 0x0000, 0x0001); // mode 1 = semi-transparent, at (0,0)
+    b.write16(0x0400_0050, 0x0100); // effect=none, 2nd target = BG0
+    b.write16(0x0400_0052, 0x0808); // 50/50
+    // Window 0 covers the whole frame; BG0 + OBJ visible, color-effects bit OFF.
+    b.write16(0x0400_0040, 0x00F0); // WIN0H: x in [0,240)
+    b.write16(0x0400_0044, 0x00A0); // WIN0V: y in [0,160)
+    b.write16(0x0400_0048, 0x0011); // WININ win0 = BG0 + OBJ, effect bit (5) clear
+    render_line(&mut b, 0);
+    assert_eq!(b.ppu.frame[0], 0x3C0F); // still 50/50 blended, not opaque red
+}
+
+#[test]
 fn bg_mosaic_repeats_cell_origin() {
     let mut b = bus();
     set_dispcnt(&mut b, 0x0100);
