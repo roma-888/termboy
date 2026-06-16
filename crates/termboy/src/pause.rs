@@ -3,6 +3,10 @@
 //! lives alongside and is also pure), so the whole module is unit-testable
 //! like `playback.rs` / `rewind.rs`.
 
+use termboy_core::{FrameBuffer, Rgb};
+
+use crate::screen::{glyph, GLYPH_H, GLYPH_W};
+
 /// Number of save-state slots (digits 0-9).
 pub const SLOTS: usize = 10;
 
@@ -226,6 +230,136 @@ impl Row {
     }
 }
 
+// Panel palette.
+const DIM_NUM: u16 = 90; // /256 ~= 0.35 background dim
+const BG: Rgb = Rgb(18, 20, 30);
+const BORDER: Rgb = Rgb(120, 124, 150);
+const TITLE: Rgb = Rgb(180, 200, 255);
+const TEXT: Rgb = Rgb(214, 216, 224);
+const SEL_BG: Rgb = Rgb(70, 84, 140);
+const SEL_TEXT: Rgb = Rgb(255, 255, 255);
+const HINT: Rgb = Rgb(120, 122, 134);
+
+fn dim_px(p: Rgb) -> Rgb {
+    Rgb(
+        ((p.0 as u16 * DIM_NUM) >> 8) as u8,
+        ((p.1 as u16 * DIM_NUM) >> 8) as u8,
+        ((p.2 as u16 * DIM_NUM) >> 8) as u8,
+    )
+}
+
+fn put(fb: &mut FrameBuffer, x: usize, y: usize, c: Rgb) {
+    if x < fb.width && y < fb.height {
+        fb.pixels[y * fb.width + x] = c;
+    }
+}
+
+fn fill_rect(fb: &mut FrameBuffer, x: usize, y: usize, w: usize, h: usize, c: Rgb) {
+    for dy in 0..h {
+        for dx in 0..w {
+            put(fb, x + dx, y + dy, c);
+        }
+    }
+}
+
+/// Width in pixels `text` occupies at `scale` (3x5 glyphs, 1px inter-glyph gap).
+fn text_width(text: &str, scale: usize) -> usize {
+    let n = text.chars().count();
+    if n == 0 {
+        0
+    } else {
+        n * (GLYPH_W + 1) * scale - scale
+    }
+}
+
+/// Draw uppercase `text` with the 3x5 glyph font, each font pixel `scale`x`scale`,
+/// top-left at (x, y).
+fn draw_text(fb: &mut FrameBuffer, x: usize, y: usize, scale: usize, text: &str, c: Rgb) {
+    let mut cx = x;
+    for ch in text.chars() {
+        let g = glyph(ch);
+        for (row, line) in g.iter().enumerate() {
+            for (col, byte) in line.as_bytes().iter().enumerate() {
+                if *byte == b'#' {
+                    fill_rect(fb, cx + col * scale, y + row * scale, scale, scale, c);
+                }
+            }
+        }
+        cx += (GLYPH_W + 1) * scale;
+    }
+}
+
+/// Dim a copy of `fb` and draw the menu `view` as a centered floating panel.
+/// Rows are windowed around the selection so any count fits any frame size.
+pub fn compose_menu(fb: &FrameBuffer, view: &MenuView) -> FrameBuffer {
+    let mut out = FrameBuffer::new(fb.width, fb.height);
+    for (i, p) in fb.pixels.iter().enumerate() {
+        out.pixels[i] = dim_px(*p);
+    }
+
+    let scale = (fb.height / 80).max(1); // GB(144)->1, GBA(160)->2
+    let line_h = GLYPH_H * scale + scale; // glyph height + 1px gap, scaled
+    let pad = 3 * scale;
+    let gap = scale; // space around the title / hint
+
+    // Widest content line decides panel width.
+    let mut content_w = text_width(&view.title, scale).max(text_width(&view.hint, scale));
+    for r in &view.rows {
+        let w = text_width(&r.label, scale)
+            + if r.value.is_empty() { 0 } else { 4 * scale + text_width(&r.value, scale) };
+        content_w = content_w.max(w);
+    }
+
+    // Rows that fit between the title and the hint, then window around `selected`.
+    let avail = fb.height.saturating_sub(2 * pad + 2 * line_h + 2 * gap);
+    let max_rows = (avail / line_h).max(1);
+    let visible = view.rows.len().min(max_rows);
+    let top = if view.selected >= visible { view.selected + 1 - visible } else { 0 };
+
+    let panel_w = (content_w + 2 * pad).min(fb.width);
+    let panel_h = (pad + line_h + gap + visible * line_h + gap + line_h + pad).min(fb.height);
+    let px = (fb.width - panel_w) / 2;
+    let py = (fb.height - panel_h) / 2;
+
+    // Background + 1px (scaled) border.
+    fill_rect(&mut out, px, py, panel_w, panel_h, BG);
+    fill_rect(&mut out, px, py, panel_w, scale, BORDER);
+    fill_rect(&mut out, px, py + panel_h - scale, panel_w, scale, BORDER);
+    fill_rect(&mut out, px, py, scale, panel_h, BORDER);
+    fill_rect(&mut out, px + panel_w - scale, py, scale, panel_h, BORDER);
+
+    let mut y = py + pad;
+
+    // Title, centered.
+    let tw = text_width(&view.title, scale);
+    draw_text(&mut out, px + panel_w.saturating_sub(tw) / 2, y, scale, &view.title, TITLE);
+    y += line_h + gap;
+
+    // Rows (windowed), label left, value right, selected row highlighted.
+    for idx in top..top + visible {
+        let r = &view.rows[idx];
+        let color = if idx == view.selected {
+            fill_rect(&mut out, px + scale, y, panel_w.saturating_sub(2 * scale), line_h, SEL_BG);
+            SEL_TEXT
+        } else {
+            TEXT
+        };
+        draw_text(&mut out, px + pad, y, scale, &r.label, color);
+        if !r.value.is_empty() {
+            let vw = text_width(&r.value, scale);
+            draw_text(&mut out, px + panel_w - pad - vw, y, scale, &r.value, color);
+        }
+        y += line_h;
+    }
+    y += gap;
+
+    // Hint, centered and dim.
+    let hw = text_width(&view.hint, scale);
+    draw_text(&mut out, px + panel_w.saturating_sub(hw) / 2, y, scale, &view.hint, HINT);
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +443,36 @@ mod tests {
             m.down();
         }
         assert_eq!(m.select(), Action::Library);
+    }
+
+    #[test]
+    fn compose_menu_dims_background_and_draws_panel() {
+        let mut fb = FrameBuffer::new(160, 144);
+        for p in fb.pixels.iter_mut() {
+            *p = Rgb(200, 200, 200);
+        }
+        let view = MenuView {
+            title: "PAUSED".into(),
+            rows: vec![Row::label("RESUME"), Row::kv("SPEED", "1X")],
+            selected: 0,
+            hint: "ESC BACK".into(),
+        };
+        let out = compose_menu(&fb, &view);
+        assert_eq!((out.width, out.height), (160, 144));
+        // The top-left corner is background, untouched by the centered panel -> dimmed.
+        assert_eq!(out.pixels[0], dim_px(Rgb(200, 200, 200)));
+        // The panel drew title-colored pixels and a selected-row highlight.
+        assert!(out.pixels.iter().any(|p| *p == TITLE));
+        assert!(out.pixels.iter().any(|p| *p == SEL_BG));
+    }
+
+    #[test]
+    fn compose_menu_windows_a_long_list_without_panicking() {
+        let fb = FrameBuffer::new(160, 144);
+        let rows: Vec<Row> = (0..SLOTS).map(|i| Row::kv(&format!("SLOT {i}"), "EMPTY")).collect();
+        let view = MenuView { title: "LOAD STATE".into(), rows, selected: 9, hint: "ESC BACK".into() };
+        let out = compose_menu(&fb, &view); // selected near the end -> windowed
+        assert_eq!((out.width, out.height), (160, 144));
     }
 
     #[test]
