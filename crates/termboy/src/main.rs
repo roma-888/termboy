@@ -13,6 +13,7 @@ mod pause;
 mod playback;
 mod rewind;
 mod screen;
+mod thumb;
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
