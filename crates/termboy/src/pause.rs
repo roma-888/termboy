@@ -44,6 +44,7 @@ pub enum Screen {
     Main,
     SaveBrowser,
     LoadBrowser,
+    Controls,
 }
 
 /// What the frontend should do in response to a keypress in the menu.
@@ -68,6 +69,7 @@ enum MainItem {
     Load,
     Speed,
     Mute,
+    Controls,
     Library,
     Quit,
 }
@@ -85,7 +87,9 @@ pub struct Menu {
     items: Vec<MainItem>,
     main_sel: usize,
     slot_sel: usize,
+    ctrl_sel: usize,
     slots: Vec<SlotInfo>,
+    controls: Vec<(String, String)>,
     speed_label: String,
     muted: bool,
 }
@@ -100,6 +104,7 @@ impl Menu {
             MainItem::Load,
             MainItem::Speed,
             MainItem::Mute,
+            MainItem::Controls,
         ];
         if has_library {
             items.push(MainItem::Library);
@@ -110,15 +115,24 @@ impl Menu {
             items,
             main_sel: 0,
             slot_sel: 0,
+            ctrl_sel: 0,
             slots,
+            controls: Vec::new(),
             speed_label,
             muted,
         }
     }
 
+    /// Provide the controls reference rows (built by the frontend from the live
+    /// keymap + fixed hotkeys) for the Controls screen.
+    pub fn set_controls(&mut self, rows: Vec<(String, String)>) {
+        self.controls = rows;
+    }
+
     pub fn up(&mut self) {
         match self.screen {
             Screen::Main => self.main_sel = self.main_sel.saturating_sub(1),
+            Screen::Controls => self.ctrl_sel = self.ctrl_sel.saturating_sub(1),
             _ => {
                 if self.slot_sel >= GRID_COLS {
                     self.slot_sel -= GRID_COLS;
@@ -130,6 +144,9 @@ impl Menu {
     pub fn down(&mut self) {
         match self.screen {
             Screen::Main => self.main_sel = (self.main_sel + 1).min(self.items.len() - 1),
+            Screen::Controls => {
+                self.ctrl_sel = (self.ctrl_sel + 1).min(self.controls.len().saturating_sub(1))
+            }
             _ => {
                 if self.slot_sel + GRID_COLS < SLOTS {
                     self.slot_sel += GRID_COLS;
@@ -147,6 +164,7 @@ impl Menu {
                 }
                 Action::None
             }
+            Screen::Controls => Action::None,
             _ => {
                 if self.slot_sel % GRID_COLS != 0 {
                     self.slot_sel -= 1;
@@ -172,7 +190,8 @@ impl Menu {
                 }
                 Action::None
             }
-            _ => {
+            Screen::Controls => Action::None,
+            Screen::SaveBrowser | Screen::LoadBrowser => {
                 if self.slot_sel % GRID_COLS != GRID_COLS - 1 && self.slot_sel + 1 < SLOTS {
                     self.slot_sel += 1;
                 }
@@ -190,11 +209,13 @@ impl Menu {
                 MainItem::Load => self.enter(Screen::LoadBrowser),
                 MainItem::Speed => Action::None,
                 MainItem::Mute => Action::ToggleMute,
+                MainItem::Controls => self.enter(Screen::Controls),
                 MainItem::Library => Action::Library,
                 MainItem::Quit => Action::Quit,
             },
             Screen::SaveBrowser => Action::Save(slot_at(self.slot_sel)),
             Screen::LoadBrowser => Action::Load(slot_at(self.slot_sel)),
+            Screen::Controls => Action::None,
         }
     }
 
@@ -212,6 +233,7 @@ impl Menu {
     fn enter(&mut self, screen: Screen) -> Action {
         self.screen = screen;
         self.slot_sel = 0;
+        self.ctrl_sel = 0;
         Action::None
     }
 
@@ -238,6 +260,7 @@ impl Menu {
                         MainItem::Load => Row::label("LOAD"),
                         MainItem::Speed => Row::kv("SPEED", &self.speed_label.to_ascii_uppercase()),
                         MainItem::Mute => Row::kv("MUTE", if self.muted { "ON" } else { "OFF" }),
+                        MainItem::Controls => Row::label("CONTROLS"),
                         MainItem::Library => Row::label("LIBRARY"),
                         MainItem::Quit => Row::label("QUIT"),
                     })
@@ -246,6 +269,7 @@ impl Menu {
                     title: "PAUSED".into(),
                     selected: self.main_sel,
                     hint: "UP DOWN MOVE  ENTER OK  ESC BACK".into(),
+                    selectable: true,
                     body: Body::List(rows),
                 }
             }
@@ -266,7 +290,22 @@ impl Menu {
                     title: title.into(),
                     selected: self.slot_sel,
                     hint: "MOVE  ENTER OK  ESC BACK".into(),
+                    selectable: true,
                     body: Body::Grid(cells),
+                }
+            }
+            Screen::Controls => {
+                let rows = self
+                    .controls
+                    .iter()
+                    .map(|(action, key)| Row::kv(action, key))
+                    .collect();
+                MenuView {
+                    title: "CONTROLS".into(),
+                    selected: self.ctrl_sel,
+                    hint: "UP DOWN SCROLL  ESC BACK".into(),
+                    selectable: false,
+                    body: Body::List(rows),
                 }
             }
         }
@@ -278,6 +317,9 @@ pub struct MenuView {
     pub title: String,
     pub selected: usize,
     pub hint: String,
+    /// Whether the selected row is drawn highlighted (false for reference screens
+    /// like Controls, where the list just scrolls).
+    pub selectable: bool,
     pub body: Body,
 }
 
@@ -463,7 +505,7 @@ fn draw_list_panel(out: &mut FrameBuffer, view: &MenuView, rows: &[Row]) {
 
     for idx in top..top + visible {
         let r = &rows[idx];
-        let color = if idx == view.selected {
+        let color = if view.selectable && idx == view.selected {
             fill_rect(out, px + scale, y, panel_w.saturating_sub(2 * scale), line_h, SEL_BG);
             SEL_TEXT
         } else {
@@ -680,17 +722,41 @@ mod tests {
 
     #[test]
     fn library_present_with_a_library() {
-        let mut m = menu(); // has_library=true
-        for _ in 0..10 {
+        // Resume Save Load Speed Mute Controls(5) Library(6) Quit(7)
+        let mut m = menu();
+        for _ in 0..20 {
             m.down(); // clamps at Quit (last)
         }
         assert_eq!(m.select(), Action::Quit);
-        // The second-to-last item is Library.
+        // Index 5 is Controls (opens the screen); index 6 is Library.
         let mut m = menu();
         for _ in 0..5 {
             m.down();
         }
+        assert_eq!(m.select(), Action::None);
+        assert_eq!(m.view().title, "CONTROLS");
+        let mut m = menu();
+        for _ in 0..6 {
+            m.down();
+        }
         assert_eq!(m.select(), Action::Library);
+    }
+
+    #[test]
+    fn controls_screen_lists_provided_rows() {
+        let mut m = menu();
+        m.set_controls(vec![("A".into(), "X".into()), ("MENU".into(), "ESC".into())]);
+        for _ in 0..5 {
+            m.down(); // to Controls (index 5)
+        }
+        assert_eq!(m.select(), Action::None); // open Controls
+        let v = m.view();
+        assert_eq!(v.title, "CONTROLS");
+        assert!(!v.selectable);
+        let rows = list_rows(&v);
+        assert!(rows.iter().any(|r| r.label == "A" && r.value == "X"));
+        assert_eq!(m.back(), Action::None); // Esc -> Main
+        assert_eq!(m.view().title, "PAUSED");
     }
 
     #[test]
@@ -711,6 +777,7 @@ mod tests {
             title: "PAUSED".into(),
             selected: 0,
             hint: "ESC BACK".into(),
+            selectable: true,
             body: Body::List(vec![Row::label("RESUME"), Row::kv("SPEED", "1X")]),
         };
         let out = compose_menu(&fb, &view);
@@ -744,7 +811,7 @@ mod tests {
     fn compose_menu_windows_a_long_list_without_panicking() {
         let fb = FrameBuffer::new(160, 144);
         let rows: Vec<Row> = (0..SLOTS).map(|i| Row::kv(&format!("SLOT {i}"), "EMPTY")).collect();
-        let view = MenuView { title: "LOAD STATE".into(), selected: 9, hint: "ESC BACK".into(), body: Body::List(rows) };
+        let view = MenuView { title: "LOAD STATE".into(), selected: 9, hint: "ESC BACK".into(), selectable: true, body: Body::List(rows) };
         let out = compose_menu(&fb, &view); // selected near the end -> windowed
         assert_eq!((out.width, out.height), (160, 144));
     }

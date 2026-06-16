@@ -104,6 +104,28 @@ fn write_thumb(sav: &Path, slot: u8, fb: &termboy_core::FrameBuffer) {
     let _ = std::fs::write(thumb_path(sav, slot), thumb::encode(fb));
 }
 
+/// The pause menu's Controls reference: d-pad + live button bindings + the fixed
+/// hotkeys. One list, so it can't drift from itself.
+fn control_rows(input: &input::Input) -> Vec<(String, String)> {
+    let mut rows = vec![("D-PAD".to_string(), "ARROWS".to_string())];
+    rows.extend(input.button_bindings());
+    rows.extend(
+        [
+            ("SAVE", "1-0"),
+            ("LOAD", "SHIFT 1-0"),
+            ("SPEED", "+/-"),
+            ("MUTE", "M"),
+            ("REWIND", "BACKSPACE"),
+            ("SCREENSHOT", "P"),
+            ("CLIP", "R"),
+            ("MENU", "ESC"),
+        ]
+        .iter()
+        .map(|(a, k)| (a.to_string(), k.to_string())),
+    );
+    rows
+}
+
 /// Load per-slot info (filled? + mtime age + decoded thumbnail) for the browser.
 fn load_slots(sav: &Path) -> Vec<pause::SlotInfo> {
     let now = std::time::SystemTime::now();
@@ -1102,12 +1124,14 @@ fn run_game<C: Core>(
                     if k.code == KeyCode::Esc {
                         // Open the pause menu (a frame must exist to dim behind it).
                         if last_fb.is_some() {
-                            paused = Some(pause::Menu::new(
+                            let mut menu = pause::Menu::new(
                                 has_library,
                                 playback.multiplier_label(),
                                 playback.is_muted(),
                                 load_slots(sav),
-                            ));
+                            );
+                            menu.set_controls(control_rows(input));
+                            paused = Some(menu);
                             menu_dirty = true;
                             continue 'game;
                         }
