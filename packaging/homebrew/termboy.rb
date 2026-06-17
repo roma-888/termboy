@@ -15,7 +15,7 @@ class Termboy < Formula
   desc "Game Boy, Game Boy Color, and Game Boy Advance emulator for your terminal"
   homepage "https://github.com/roma-888/termboy"
   url "https://github.com/roma-888/termboy/archive/refs/tags/v0.5.0.tar.gz"
-  sha256 "PENDING_TAG_TARBALL_SHA256"
+  sha256 "67a54ecc81ce5fd6400672589b4eb1dc1ff507b4debf67badc5e2988e415d7aa"
   license "MIT"
   head "https://github.com/roma-888/termboy.git", branch: "main"
 
