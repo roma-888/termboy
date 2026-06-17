@@ -6,6 +6,10 @@
 *.gb
 *.gbc
 *.sav
+*.sav.tmp
+# Save states (digit keys) and their thumbnail sidecars land next to the ROM.
+*.ss[0-9]
+*.thumb
 !crates/termboy-gb/tests/roms/**/*.gb
 docs/superpowers/
 # Track the roms/ folder (placeholder README) but never the ROMs/saves in it.

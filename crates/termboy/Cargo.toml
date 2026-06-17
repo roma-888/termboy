@@ -12,9 +12,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-termboy-core = { path = "../termboy-core", version = "0.4.0" }
-termboy-gb = { path = "../termboy-gb", version = "0.4.0" }
-termboy-gba = { path = "../termboy-gba", version = "0.4.0" }
+termboy-core = { path = "../termboy-core", version = "0.5.0" }
+termboy-gb = { path = "../termboy-gb", version = "0.5.0" }
+termboy-gba = { path = "../termboy-gba", version = "0.5.0" }
 crossterm = "0.29"
 cpal = "0.16"
 miniz_oxide = "0.8" # zlib for the kitty graphics protocol's o=z compression

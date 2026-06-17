@@ -7,7 +7,9 @@ A Game Boy, Game Boy Color, and Game Boy Advance emulator that runs in your term
 Written in Rust. Three emulation cores share one frontend — a half-block terminal
 renderer (with true full-color images on kitty-graphics terminals) and
 auto-scaling, a ROM picker grouped by hardware, configurable input, audio,
-battery saves, save-state slots, adjustable play speed, and rewind.
+battery saves, save-state slots, adjustable play speed, rewind, an in-game pause
+menu (save/load with thumbnail previews, a controls reference, return to the
+library), and screenshot/clip capture.
 
 <!-- Demo GIF slot: run `vhs assets/demo.tape` to produce assets/demo.gif on a
      real terminal, then add:  ![termboy demo](assets/demo.gif) -->
